@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>תיעוד רכבים במוסכים</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0b1220;
+    --panel:rgba(255,255,255,0.06);
+    --panel-border:rgba(255,255,255,0.12);
+    --accent:#3aa0ff;
+    --accent2:#22d3a8;
+    --text:#e8edf6;
+    --text-dim:#93a0b8;
+    --danger:#ff5c72;
+    --warn:#ffb020;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;}
+  body{
+    font-family:'Rubik',sans-serif;
+    background:radial-gradient(1200px 800px at 80% -10%, #16233f 0%, var(--bg) 60%);
+    color:var(--text);
+    min-height:100vh;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .app{max-width:640px;margin:0 auto;padding:16px 16px 96px;}
+  header.top{
+    position:sticky;top:0;z-index:10;
+    backdrop-filter:blur(10px);
+    background:rgba(11,18,32,0.85);
+    padding:14px 16px;margin:-16px -16px 16px;
+    border-bottom:1px solid var(--panel-border);
+    display:flex;align-items:center;justify-content:space-between;
+  }
+  header.top h1{font-size:17px;margin:0;font-weight:600;}
+  .icon-btn{
+    background:var(--panel);border:1px solid var(--panel-border);
+    color:var(--text);border-radius:12px;padding:8px 10px;font-size:14px;
+    display:inline-flex;align-items:center;gap:6px;cursor:pointer;
+  }
+  .card{
+    background:var(--panel);
+    border:1px solid var(--panel-border);
+    border-radius:16px;
+    padding:16px;
+    margin-bottom:14px;
+    backdrop-filter:blur(8px);
+  }
+  .field{margin-bottom:14px;}
+  .field label{display:block;font-size:13px;color:var(--text-dim);margin-bottom:6px;}
+  input[type=text], input[type=search], textarea, select{
+    width:100%;padding:13px 14px;border-radius:12px;
+    border:1px solid var(--panel-border);background:rgba(255,255,255,0.04);
+    color:var(--text);font-family:inherit;font-size:16px;
+  }
+  textarea{min-height:80px;resize:vertical;}
+  input::placeholder, textarea::placeholder{color:var(--text-dim);}
+  .btn{
+    display:inline-flex;align-items:center;justify-content:center;gap:8px;
+    padding:14px 18px;border-radius:14px;border:none;font-size:15px;font-weight:600;
+    cursor:pointer;width:100%;
+  }
+  .btn-primary{background:linear-gradient(135deg,var(--accent),#2e6bff);color:#06111f;}
+  .btn-secondary{background:var(--panel);border:1px solid var(--panel-border);color:var(--text);}
+  .btn-success{background:linear-gradient(135deg,var(--accent2),#0fae87);color:#04231b;}
+  .btn-danger{background:transparent;border:1px solid var(--danger);color:var(--danger);}
+  .btn-sm{padding:9px 12px;font-size:13px;width:auto;}
+  .row{display:flex;gap:10px;}
+  .row > *{flex:1;}
+  .fab{
+    position:fixed;bottom:20px;left:50%;transform:translateX(-50%);
+    max-width:608px;width:calc(100% - 32px);
+    box-shadow:0 10px 30px rgba(58,160,255,0.35);
+    z-index:20;
+  }
+  .badge{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;}
+  .badge-open{background:rgba(255,176,32,0.18);color:var(--warn);}
+  .badge-done{background:rgba(34,211,168,0.18);color:var(--accent2);}
+  .case-item{
+    display:flex;justify-content:space-between;align-items:center;
+    padding:14px;border-radius:14px;background:var(--panel);
+    border:1px solid var(--panel-border);margin-bottom:10px;cursor:pointer;
+  }
+  .case-item .plate{font-weight:700;font-size:16px;direction:ltr;text-align:right;}
+  .case-item .meta{color:var(--text-dim);font-size:13px;margin-top:2px;}
+  .empty{text-align:center;color:var(--text-dim);padding:40px 20px;font-size:14px;}
+  .gallery{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px;}
+  .thumb{position:relative;border-radius:10px;overflow:hidden;aspect-ratio:1;background:#000;}
+  .thumb img{width:100%;height:100%;object-fit:cover;}
+  .thumb .del{
+    position:absolute;top:4px;left:4px;background:rgba(0,0,0,0.6);color:#fff;
+    border:none;border-radius:8px;width:24px;height:24px;font-size:14px;cursor:pointer;
+  }
+  .info-line{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--panel-border);font-size:14px;}
+  .info-line:last-child{border-bottom:none;}
+  .info-line span:first-child{color:var(--text-dim);}
+  .toast{
+    position:fixed;bottom:100px;left:50%;transform:translateX(-50%);
+    background:#1a2540;border:1px solid var(--panel-border);color:var(--text);
+    padding:12px 18px;border-radius:12px;font-size:14px;z-index:50;
+    box-shadow:0 8px 24px rgba(0,0,0,0.4);
+  }
+  .file-chip{display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,0.05);padding:10px 12px;border-radius:10px;margin-top:8px;font-size:13px;}
+  .garage-row{display:flex;align-items:center;justify-content:space-between;padding:12px;border-radius:12px;background:var(--panel);border:1px solid var(--panel-border);margin-bottom:8px;}
+  .hidden{display:none !important;}
+</style>
+</head>
+<body>
+<div class="app" id="app"></div>
+<div id="toastHost"></div>
+
+<div id="cameraOverlay" style="position:fixed;inset:0;background:#000;z-index:200;display:none;flex-direction:column;">
+  <video id="cameraVideo" autoplay playsinline muted style="flex:1;width:100%;object-fit:cover;background:#000;"></video>
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 20px calc(18px + env(safe-area-inset-bottom));background:rgba(0,0,0,0.7);">
+    <button class="btn btn-secondary btn-sm" onclick="closeCamera()">✕ סיום (<span id="camCount">0</span>)</button>
+    <button onclick="capturePhoto()" style="width:68px;height:68px;border-radius:50%;background:#fff;border:4px solid rgba(255,255,255,0.4);"></button>
+    <span style="width:80px"></span>
+  </div>
+</div>
+<script>
+/* ====================== IndexedDB layer ====================== */
+const DB_NAME = 'garagedocs';
+const DB_VERSION = 1;
+let dbPromise = new Promise((resolve, reject) => {
+  const req = indexedDB.open(DB_NAME, DB_VERSION);
+  req.onupgradeneeded = (e) => {
+    const db = e.target.result;
+    if (!db.objectStoreNames.contains('cases')) {
+      db.createObjectStore('cases', { keyPath: 'caseId' });
+    }
+    if (!db.objectStoreNames.contains('garages')) {
+      db.createObjectStore('garages', { keyPath: 'garageId' });
+    }
+    if (!db.objectStoreNames.contains('photos')) {
+      const s = db.createObjectStore('photos', { keyPath: 'photoId' });
+      s.createIndex('caseId', 'caseId');
+    }
+    if (!db.objectStoreNames.contains('quotes')) {
+      const s = db.createObjectStore('quotes', { keyPath: 'quoteId' });
+      s.createIndex('caseId', 'caseId');
+    }
+  };
+  req.onsuccess = () => resolve(req.result);
+  req.onerror = () => reject(req.error);
+});
+
+async function tx(storeName, mode) {
+  const db = await dbPromise;
+  return db.transaction(storeName, mode).objectStore(storeName);
+}
+function reqToPromise(req) {
+  return new Promise((res, rej) => { req.onsuccess = () => res(req.result); req.onerror = () => rej(req.error); });
+}
+async function dbGetAll(store) { return reqToPromise((await tx(store, 'readonly')).getAll()); }
+async function dbGet(store, key) { return reqToPromise((await tx(store, 'readonly')).get(key)); }
+async function dbPut(store, val) { return reqToPromise((await tx(store, 'readwrite')).put(val)); }
+async function dbDelete(store, key) { return reqToPromise((await tx(store, 'readwrite')).delete(key)); }
+async function dbGetByIndex(store, indexName, value) {
+  const s = await tx(store, 'readonly');
+  return reqToPromise(s.index(indexName).getAll(value));
+}
+
+function uuid() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+    const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
+/* seed a couple of default garages on first run */
+(async () => {
+  const existing = await dbGetAll('garages');
+  if (existing.length === 0) {
+    for (const name of ['מוסך א׳', 'מוסך ב׳']) {
+      await dbPut('garages', { garageId: uuid(), name, isActive: true });
+    }
+    render();
+  }
+})();
+
+/* ====================== Plate normalization ====================== */
+function normalizePlate(raw) { return (raw || '').replace(/\D/g, ''); }
+function isValidPlate(n) { return n.length >= 7 && n.length <= 8; }
+function formatPlate(n) {
+  if (n.length === 8) return `${n.slice(0,3)}-${n.slice(3,5)}-${n.slice(5,8)}`;
+  if (n.length === 7) return `${n.slice(0,2)}-${n.slice(2,5)}-${n.slice(5,7)}`;
+  return n;
+}
+
+/* ====================== data.gov.il lookup ======================
+   שים לב: שמות השדות למטה הם מועמדים סבירים (מבוססי תיעוד ציבורי של
+   המאגר), לא מאומתים ישירות מול ה-API. הקוד לא נשען על שם שדה יחיד
+   לחיפוש — הוא שולח q=<מספר רכב> (חיפוש טקסט חופשי) ואז מוודא התאמה
+   מדויקת מקומית, וכל שדה שלא זוהה מוצג כ"נתון נוסף" במקום להיעלם.
+   אם דפדפן חוסם את הבקשה (CORS) — המשתמש עדיין יכול להמשיך ידנית.
+*/
+const RESOURCE_ID = '053cea08-09bc-40ec-8f7a-156f0677aff3';
+const FIELD_CANDIDATES = {
+  plate: ['mispar_rechev','license_number','plate_number','mispar_rishuy'],
+  manufacturer: ['tozeret_nm','tozeret_cd','manufacturer'],
+  model: ['kinuy_mishari','degem_nm','model'],
+  year: ['shnat_yitzur','production_year'],
+  color: ['tzeva_rechev','color'],
+  fuel: ['sug_delek_nm','fuel_type'],
+};
+const ALL_CANDIDATES = Object.values(FIELD_CANDIDATES).flat();
+
+async function lookupVehicle(normalizedPlate) {
+  const url = `https://data.gov.il/api/3/action/datastore_search?resource_id=${RESOURCE_ID}&q=${normalizedPlate}&limit=5`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return { status: 'error', message: `HTTP ${res.status}` };
+    const data = await res.json();
+    if (!data.success) return { status: 'error', message: 'success=false מה-API' };
+    const records = (data.result && data.result.records) || [];
+    const match = records.find(r =>
+      FIELD_CANDIDATES.plate.some(k => String(r[k] ?? '').trim() === normalizedPlate) ||
+      Object.values(r).some(v => String(v ?? '').trim() === normalizedPlate)
+    );
+    if (!match) return { status: 'not_found' };
+
+    const firstMatch = (keys) => {
+      for (const k of keys) { if (match[k] != null && String(match[k]).trim() !== '') return String(match[k]); }
+      return null;
+    };
+    const extra = {};
+    for (const [k, v] of Object.entries(match)) {
+      if (!ALL_CANDIDATES.includes(k) && v != null && String(v).trim() !== '') extra[k] = String(v);
+    }
+    return {
+      status: 'found',
+      info: {
+        manufacturer: firstMatch(FIELD_CANDIDATES.manufacturer),
+        model: firstMatch(FIELD_CANDIDATES.model),
+        year: firstMatch(FIELD_CANDIDATES.year),
+        color: firstMatch(FIELD_CANDIDATES.color),
+        fuel: firstMatch(FIELD_CANDIDATES.fuel),
+        extra,
+        raw: match,
+      }
+    };
+  } catch (e) {
+    return { status: 'error', message: e.message };
+  }
+}
+
+/* ====================== Toast ====================== */
+function toast(msg) {
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = msg;
+  document.getElementById('toastHost').appendChild(el);
+  setTimeout(() => el.remove(), 2600);
+}
+
+/* ====================== Router / State ====================== */
+let route = { screen: 'list' };
+function nav(screen, params) { route = { screen, ...(params||{}) }; render(); window.scrollTo(0,0); }
+
+/* ====================== Screens ====================== */
+
+async function screenList() {
+  const cases = (await dbGetAll('cases')).sort((a,b) => b.createdAt - a.createdAt);
+  const garages = await dbGetAll('garages');
+  const search = (window.__searchTerm || '').trim();
+  const filterGarage = window.__filterGarage || '';
+
+  const filtered = cases.filter(c => {
+    const matchesSearch = !search ||
+      c.plateNormalized.includes(normalizePlate(search)) ||
+      (c.garageName || '').includes(search) ||
+      (c.manufacturer || '').includes(search) ||
+      (c.model || '').includes(search);
+    const matchesGarage = !filterGarage || c.garageId === filterGarage;
+    return matchesSearch && matchesGarage;
+  });
+
+  return `
+    <header class="top">
+      <h1>תיעוד רכבים</h1>
+      <button class="icon-btn" onclick="nav('garages')">🏢 מוסכים</button>
+    </header>
+
+    <div class="field">
+      <input type="search" id="searchInput" placeholder="🔍 חיפוש לפי מספר רכב, מוסך או דגם" value="${escapeHtml(search)}">
+    </div>
+    <div class="field">
+      <select id="garageFilter">
+        <option value="">כל המוסכים</option>
+        ${garages.map(g => `<option value="${g.garageId}" ${g.garageId===filterGarage?'selected':''}>${escapeHtml(g.name)}</option>`).join('')}
+      </select>
+    </div>
+
+    ${filtered.length === 0 ? `<div class="empty">אין עדיין תיקים${search||filterGarage ? ' התואמים לחיפוש' : ''}.<br>לחץ על "+ תיק חדש" למטה כדי להתחיל.</div>` : ''}
+
+    ${filtered.map(c => `
+      <div class="case-item" onclick="nav('detail',{caseId:'${c.caseId}'})">
+        <div>
+          <div class="plate">${formatPlate(c.plateNormalized)}</div>
+          <div class="meta">${[c.manufacturer, c.model].filter(Boolean).join(' ') || 'ללא נתוני רכב'} · ${escapeHtml(c.garageName)} · ${formatDate(c.createdAt)}</div>
+        </div>
+        <span class="badge ${c.status==='completed'?'badge-done':'badge-open'}">${c.status==='completed'?'הושלם':'פתוח'}</span>
+      </div>
+    `).join('')}
+
+    <button class="btn btn-primary fab" onclick="nav('new')">+ תיק חדש</button>
+  `;
+}
+
+function bindListEvents() {
+  const s = document.getElementById('searchInput');
+  const g = document.getElementById('garageFilter');
+  if (s) s.oninput = (e) => { window.__searchTerm = e.target.value; renderInPlace(); };
+  if (g) g.onchange = (e) => { window.__filterGarage = e.target.value; renderInPlace(); };
+}
+
+let __newCaseDraft = null;
+function freshDraft() {
+  return { plateInput: '', lookup: null, lookupLoading: false, garageId: '', photos: [], quote: null, notes: '',
+    manual: { manufacturer: '', model: '', year: '', color: '', fuel: '' } };
+}
+
+async function screenNew() {
+  if (!__newCaseDraft) __newCaseDraft = freshDraft();
+  const d = __newCaseDraft;
+  const garages = await dbGetAll('garages');
+
+  return `
+    <header class="top">
+      <button class="icon-btn" onclick="cancelNewCase()">↩ ביטול</button>
+      <h1>תיק חדש</h1>
+      <span></span>
+    </header>
+
+    <div class="card">
+      <div class="field">
+        <label>מספר רכב</label>
+        <input type="text" id="plateInput" inputmode="numeric" placeholder="לדוגמה: 12345678" value="${escapeHtml(d.plateInput)}">
+      </div>
+      <button class="btn btn-secondary" id="lookupBtn" onclick="doLookup()">בדוק נתוני רכב</button>
+
+      ${d.lookupLoading ? `<div style="text-align:center;margin-top:12px;color:var(--text-dim)">בודק מול data.gov.il...</div>` : ''}
+
+      ${d.lookup && d.lookup.status === 'found' ? `
+        <div class="card" style="margin-top:12px;margin-bottom:0;background:rgba(34,211,168,0.08);border-color:rgba(34,211,168,0.3)">
+          ${d.lookup.info.manufacturer ? `<div class="info-line"><span>יצרן</span><span>${escapeHtml(d.lookup.info.manufacturer)}</span></div>` : ''}
+          ${d.lookup.info.model ? `<div class="info-line"><span>דגם</span><span>${escapeHtml(d.lookup.info.model)}</span></div>` : ''}
+          ${d.lookup.info.year ? `<div class="info-line"><span>שנת ייצור</span><span>${escapeHtml(d.lookup.info.year)}</span></div>` : ''}
+          ${d.lookup.info.color ? `<div class="info-line"><span>צבע</span><span>${escapeHtml(d.lookup.info.color)}</span></div>` : ''}
+          ${d.lookup.info.fuel ? `<div class="info-line"><span>סוג דלק</span><span>${escapeHtml(d.lookup.info.fuel)}</span></div>` : ''}
+          ${!d.lookup.info.manufacturer && !d.lookup.info.model && !d.lookup.info.year && !d.lookup.info.color && !d.lookup.info.fuel
+            ? `<div style="color:var(--text-dim);font-size:13px;">הרכב נמצא במאגר אך אף אחד מחמשת השדות המבוקשים לא זוהה בוודאות. אפשר לשלוח לקלוד את ה-JSON הגולמי (שמור בתיק) כדי לתקן את שמות השדות.</div>`
+            : ''}
+        </div>
+        <button class="btn btn-secondary btn-sm" style="margin-top:10px" onclick="toggleRawJson()">${d.showRaw ? 'הסתר' : 'הצג'} נתונים גולמיים (לתיקון שמות שדות)</button>
+        ${d.showRaw ? `<textarea readonly style="margin-top:8px;min-height:140px;font-size:12px;direction:ltr;text-align:left;">${escapeHtml(JSON.stringify(d.lookup.info.raw, null, 2))}</textarea>` : ''}
+      ` : ''}
+      ${d.lookup && d.lookup.status === 'not_found' ? `<div style="margin-top:12px;color:var(--warn);font-size:13px;">לא נמצאו נתוני רכב במאגר הממשלתי. ניתן להמשיך ולפתוח את התיק באופן ידני.</div>` : ''}
+      ${d.lookup && d.lookup.status === 'error' ? `<div style="margin-top:12px;color:var(--text-dim);font-size:13px;">לא ניתן היה לבדוק מול data.gov.il כרגע (${escapeHtml(d.lookup.message||'')}). ניתן להמשיך ידנית.</div>` : ''}
+
+      ${d.lookup && (d.lookup.status === 'not_found' || d.lookup.status === 'error') ? `
+        <div class="card" style="margin-top:12px;margin-bottom:0;">
+          <div class="field"><label>יצרן (ידני)</label><input type="text" id="manManufacturer" value="${escapeHtml(d.manual.manufacturer)}"></div>
+          <div class="field"><label>דגם (ידני)</label><input type="text" id="manModel" value="${escapeHtml(d.manual.model)}"></div>
+          <div class="field"><label>שנת ייצור (ידני)</label><input type="text" inputmode="numeric" id="manYear" value="${escapeHtml(d.manual.year)}"></div>
+          <div class="field"><label>צבע (ידני)</label><input type="text" id="manColor" value="${escapeHtml(d.manual.color)}"></div>
+          <div class="field" style="margin-bottom:0"><label>סוג דלק (ידני)</label><input type="text" id="manFuel" value="${escapeHtml(d.manual.fuel)}"></div>
+        </div>
+      ` : ''}
+    </div>
+
+    <div class="card">
+      <div class="field" style="margin-bottom:0">
+        <label>מוסך</label>
+        <select id="garageSelect">
+          <option value="">בחר מוסך...</option>
+          ${garages.map(g => `<option value="${g.garageId}" ${g.garageId===d.garageId?'selected':''}>${escapeHtml(g.name)}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+
+    <div class="card">
+      <label style="display:block;font-size:13px;color:var(--text-dim);margin-bottom:10px;">תמונות (${d.photos.length})</label>
+      <input type="file" accept="image/*" multiple id="galleryInput" class="hidden" onchange="onPhotoTaken(event)">
+      <div class="row">
+        <button class="btn btn-secondary" onclick="openCamera()">📷 צילום</button>
+        <button class="btn btn-secondary" onclick="document.getElementById('galleryInput').click()">📤 העלאה</button>
+      </div>
+      <div class="gallery">
+        ${d.photos.map((p,i) => `
+          <div class="thumb">
+            <img src="${p.url}">
+            <button class="del" onclick="removePhoto(${i})">✕</button>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+
+    <div class="card">
+      <label style="display:block;font-size:13px;color:var(--text-dim);margin-bottom:10px;">הצעת מחיר (אופציונלי)</label>
+      <input type="file" accept="application/pdf,image/jpeg,image/png" id="quoteInput" class="hidden" onchange="onQuoteChosen(event)">
+      ${d.quote
+        ? `<div class="file-chip"><span>📄 ${escapeHtml(d.quote.name)}</span><button class="btn btn-danger btn-sm" onclick="removeQuote()">הסר</button></div>`
+        : `<button class="btn btn-secondary" onclick="document.getElementById('quoteInput').click()">+ הוסף הצעת מחיר</button>`
+      }
+    </div>
+
+    <div class="card">
+      <div class="field" style="margin-bottom:0">
+        <label>הערות</label>
+        <textarea id="notesInput" placeholder="לדוגמה: נזק בדלת ימין. לבדוק גם חיישנים.">${escapeHtml(d.notes)}</textarea>
+      </div>
+    </div>
+
+    <button class="btn btn-success fab" onclick="finishCase()">✓ אישור וסיום תיק</button>
+  `;
+}
+
+function bindNewCaseEvents() {
+  const p = document.getElementById('plateInput');
+  if (p) p.oninput = (e) => { __newCaseDraft.plateInput = e.target.value; };
+  const g = document.getElementById('garageSelect');
+  if (g) g.onchange = (e) => { __newCaseDraft.garageId = e.target.value; };
+  const n = document.getElementById('notesInput');
+  if (n) n.oninput = (e) => { __newCaseDraft.notes = e.target.value; };
+
+  const manualFields = [
+    ['manManufacturer','manufacturer'], ['manModel','model'], ['manYear','year'],
+    ['manColor','color'], ['manFuel','fuel']
+  ];
+  for (const [id, key] of manualFields) {
+    const el = document.getElementById(id);
+    if (el) el.oninput = (e) => { __newCaseDraft.manual[key] = e.target.value; };
+  }
+}
+
+async function doLookup() {
+  const normalized = normalizePlate(__newCaseDraft.plateInput);
+  if (!isValidPlate(normalized)) { toast('מספר רכב לא תקין (7-8 ספרות)'); return; }
+  __newCaseDraft.lookupLoading = true;
+  renderInPlace();
+  const result = await lookupVehicle(normalized);
+  __newCaseDraft.lookup = result;
+  __newCaseDraft.lookupLoading = false;
+  renderInPlace();
+}
+
+function toggleRawJson() {
+  __newCaseDraft.showRaw = !__newCaseDraft.showRaw;
+  renderInPlace();
+}
+
+function onPhotoTaken(e) {
+  // מבחר מהגלריה (אפשר לבחור כמה תמונות בבת אחת)
+  const files = Array.from(e.target.files || []);
+  for (const file of files) {
+    __newCaseDraft.photos.push({ file, url: URL.createObjectURL(file) });
+  }
+  e.target.value = '';
+  renderInPlace();
+}
+function removePhoto(i) { __newCaseDraft.photos.splice(i,1); renderInPlace(); }
+
+/* ====================== Live in-page camera ======================
+   צילום ישיר דרך getUserMedia במקום אפליקציית המצלמה של המערכת —
+   כך אין מסך "אישור תמונה" אחרי כל צילום, ואפשר לצלם ברצף מהיר.
+*/
+let __cameraStream = null;
+
+async function openCamera() {
+  try {
+    __cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: { ideal: 'environment' } },
+      audio: false
+    });
+  } catch (e) {
+    toast('לא ניתן לגשת למצלמה (' + e.message + '). אפשר לבחור תמונות מהגלריה במקום.');
+    return;
+  }
+  const video = document.getElementById('cameraVideo');
+  video.srcObject = __cameraStream;
+  document.getElementById('cameraOverlay').style.display = 'flex';
+  updateCamCount();
+}
+
+function updateCamCount() {
+  const el = document.getElementById('camCount');
+  if (el) el.textContent = __newCaseDraft.photos.length;
+}
+
+function capturePhoto() {
+  const video = document.getElementById('cameraVideo');
+  if (!video.videoWidth) return; // המצלמה עוד לא סיפקה פריים
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    __newCaseDraft.photos.push({ file: blob, url: URL.createObjectURL(blob) });
+    updateCamCount();
+    flashShutter();
+  }, 'image/jpeg', 0.9);
+}
+
+function flashShutter() {
+  const v = document.getElementById('cameraVideo');
+  v.style.opacity = '0.4';
+  setTimeout(() => { v.style.opacity = '1'; }, 90);
+}
+
+function closeCamera() {
+  if (__cameraStream) { __cameraStream.getTracks().forEach(t => t.stop()); __cameraStream = null; }
+  document.getElementById('cameraOverlay').style.display = 'none';
+  renderInPlace();
+}
+
+function onQuoteChosen(e) {
+  const file = e.target.files[0];
+  if (!file) return;
+  __newCaseDraft.quote = { file, name: file.name, mime: file.type };
+  e.target.value = '';
+  renderInPlace();
+}
+function removeQuote() { __newCaseDraft.quote = null; renderInPlace(); }
+
+function cancelNewCase() {
+  __newCaseDraft = null;
+  nav('list');
+}
+
+async function finishCase() {
+  const d = __newCaseDraft;
+  const normalized = normalizePlate(d.plateInput);
+  if (!isValidPlate(normalized)) { toast('יש להזין מספר רכב תקין'); return; }
+  if (!d.garageId) { toast('יש לבחור מוסך'); return; }
+
+  const garages = await dbGetAll('garages');
+  const garage = garages.find(g => g.garageId === d.garageId);
+  const caseId = uuid();
+  const createdAt = Date.now();
+
+  const info = (d.lookup && d.lookup.status === 'found') ? d.lookup.info : null;
+  const m = d.manual || {};
+
+  await dbPut('cases', {
+    caseId,
+    plateNormalized: normalized,
+    garageId: d.garageId,
+    garageName: garage ? garage.name : '',
+    manufacturer: info?.manufacturer || m.manufacturer || null,
+    model: info?.model || m.model || null,
+    year: info?.year || m.year || null,
+    color: info?.color || m.color || null,
+    fuel: info?.fuel || m.fuel || null,
+    vehicleDataFound: !!info,
+    vehicleDataRaw: info ? JSON.stringify(info.raw) : null,
+    notes: d.notes || '',
+    createdAt,
+    status: 'completed',
+  });
+
+  for (const p of d.photos) {
+    await dbPut('photos', { photoId: uuid(), caseId, blob: p.file });
+  }
+  if (d.quote) {
+    await dbPut('quotes', { quoteId: uuid(), caseId, blob: d.quote.file, name: d.quote.name, mime: d.quote.mime });
+  }
+
+  __newCaseDraft = null;
+  toast('התיק נשמר בהצלחה');
+  nav('list');
+}
+
+async function screenDetail(caseId) {
+  const c = await dbGet('cases', caseId);
+  if (!c) { nav('list'); return ''; }
+  const photos = await dbGetByIndex('photos', 'caseId', caseId);
+  const quotes = await dbGetByIndex('quotes', 'caseId', caseId);
+
+  return `
+    <header class="top">
+      <button class="icon-btn" onclick="nav('list')">↩ חזרה</button>
+      <h1>${formatPlate(c.plateNormalized)}</h1>
+      <span></span>
+    </header>
+
+    <div class="card">
+      <div class="info-line"><span>רכב</span><span>${[c.manufacturer,c.model].filter(Boolean).join(' ') || 'לא נמצא במאגר'}</span></div>
+      ${c.year ? `<div class="info-line"><span>שנת ייצור</span><span>${escapeHtml(c.year)}</span></div>` : ''}
+      ${c.color ? `<div class="info-line"><span>צבע</span><span>${escapeHtml(c.color)}</span></div>` : ''}
+      <div class="info-line"><span>מוסך</span><span>${escapeHtml(c.garageName)}</span></div>
+      <div class="info-line"><span>תאריך</span><span>${formatDate(c.createdAt)}</span></div>
+      <div class="info-line"><span>סטטוס</span><span class="badge badge-done">הושלם</span></div>
+    </div>
+
+    <div class="card">
+      <label style="font-size:13px;color:var(--text-dim);">תמונות (${photos.length})</label>
+      <div class="gallery" id="detailGallery">
+        ${photos.map(p => `<div class="thumb"><img data-photo-id="${p.photoId}"></div>`).join('')}
+      </div>
+      ${photos.length > 0 ? `<button class="btn btn-secondary" style="margin-top:12px" onclick="sharePhotos('${caseId}')">📤 שתף תמונות</button>` : ''}
+    </div>
+
+    ${quotes.length > 0 ? `
+      <div class="card">
+        <label style="font-size:13px;color:var(--text-dim);">הצעת מחיר</label>
+        ${quotes.map(q => `<div class="file-chip" style="margin-top:8px"><span>📄 ${escapeHtml(q.name)}</span><button class="btn btn-secondary btn-sm" onclick="openQuote('${q.quoteId}')">פתח</button></div>`).join('')}
+      </div>
+    ` : ''}
+
+    <div class="card">
+      <label style="display:block;font-size:13px;color:var(--text-dim);margin-bottom:10px;">הערות</label>
+      <textarea id="detailNotes">${escapeHtml(c.notes || '')}</textarea>
+      <button class="btn btn-secondary" style="margin-top:10px" onclick="saveNotes('${caseId}')">שמור הערות</button>
+    </div>
+  `;
+}
+
+async function afterDetailRender(caseId) {
+  const photos = await dbGetByIndex('photos', 'caseId', caseId);
+  for (const p of photos) {
+    const img = document.querySelector(`img[data-photo-id="${p.photoId}"]`);
+    if (img) img.src = URL.createObjectURL(p.blob);
+  }
+}
+
+async function saveNotes(caseId) {
+  const c = await dbGet('cases', caseId);
+  c.notes = document.getElementById('detailNotes').value;
+  await dbPut('cases', c);
+  toast('ההערות נשמרו');
+}
+
+async function sharePhotos(caseId) {
+  const photos = await dbGetByIndex('photos', 'caseId', caseId);
+  const c = await dbGet('cases', caseId);
+  const files = photos.map((p,i) => new File([p.blob], `photo_${i+1}.jpg`, { type: p.blob.type || 'image/jpeg' }));
+  if (navigator.canShare && navigator.canShare({ files })) {
+    try {
+      await navigator.share({ files, title: `תמונות רכב ${formatPlate(c.plateNormalized)}`, text: `תמונות מהתיק של רכב ${formatPlate(c.plateNormalized)} - ${c.garageName}` });
+    } catch (e) { /* המשתמש ביטל את השיתוף */ }
+  } else {
+    toast('שיתוף קבצים לא נתמך בדפדפן הזה — נסה מכרום באנדרואיד');
+  }
+}
+
+async function openQuote(quoteId) {
+  const q = await dbGet('quotes', quoteId);
+  const url = URL.createObjectURL(q.blob);
+  window.open(url, '_blank');
+}
+
+async function screenGarages() {
+  const garages = await dbGetAll('garages');
+  return `
+    <header class="top">
+      <button class="icon-btn" onclick="nav('list')">↩ חזרה</button>
+      <h1>ניהול מוסכים</h1>
+      <span></span>
+    </header>
+
+    ${garages.map(g => `
+      <div class="garage-row">
+        <span>${escapeHtml(g.name)}</span>
+        <div class="row" style="flex:none;gap:8px;">
+          <button class="btn btn-secondary btn-sm" onclick="renameGarage('${g.garageId}')">עריכה</button>
+          <button class="btn btn-danger btn-sm" onclick="deleteGarage('${g.garageId}')">מחיקה</button>
+        </div>
+      </div>
+    `).join('')}
+
+    <div class="card">
+      <div class="row">
+        <input type="text" id="newGarageName" placeholder="שם מוסך חדש">
+        <button class="btn btn-primary" style="flex:0 0 auto;width:auto;padding:13px 20px" onclick="addGarage()">הוסף</button>
+      </div>
+    </div>
+  `;
+}
+
+async function addGarage() {
+  const input = document.getElementById('newGarageName');
+  const name = input.value.trim();
+  if (!name) return;
+  await dbPut('garages', { garageId: uuid(), name, isActive: true });
+  renderInPlace();
+}
+async function renameGarage(id) {
+  const g = await dbGet('garages', id);
+  const name = prompt('שם חדש למוסך:', g.name);
+  if (name && name.trim()) { g.name = name.trim(); await dbPut('garages', g); renderInPlace(); }
+}
+async function deleteGarage(id) {
+  if (!confirm('למחוק את המוסך? תיקים קיימים ישמרו את השם ההיסטורי שלהם.')) return;
+  await dbDelete('garages', id);
+  renderInPlace();
+}
+
+/* ====================== Utils ====================== */
+function escapeHtml(str) {
+  return String(str ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function formatDate(ts) {
+  const d = new Date(ts);
+  return d.toLocaleDateString('he-IL') + ' ' + d.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'});
+}
+
+/* ====================== Render loop ====================== */
+async function render() {
+  // שומרים איזה שדה היה בפוקוס ומיקום הסמן בו, כדי לא לאבד את המקלדת
+  // כשמריצים רינדור מלא באמצע הקלדה (למשל בחיפוש).
+  const active = document.activeElement;
+  const activeId = active && active.id;
+  const selStart = active && typeof active.selectionStart === 'number' ? active.selectionStart : null;
+  const selEnd = active && typeof active.selectionEnd === 'number' ? active.selectionEnd : null;
+
+  const app = document.getElementById('app');
+  if (route.screen === 'list') app.innerHTML = await screenList();
+  else if (route.screen === 'new') app.innerHTML = await screenNew();
+  else if (route.screen === 'detail') app.innerHTML = await screenDetail(route.caseId);
+  else if (route.screen === 'garages') app.innerHTML = await screenGarages();
+  afterRender();
+
+  if (activeId) {
+    const el = document.getElementById(activeId);
+    if (el) {
+      el.focus();
+      if (selStart != null && el.setSelectionRange) {
+        try { el.setSelectionRange(selStart, selEnd); } catch (e) {}
+      }
+    }
+  }
+}
+async function renderInPlace() { await render(); }
+function afterRender() {
+  if (route.screen === 'list') bindListEvents();
+  if (route.screen === 'new') bindNewCaseEvents();
+  if (route.screen === 'detail') afterDetailRender(route.caseId);
+}
+
+render();
+
+</script>
+</body>
+</html>
