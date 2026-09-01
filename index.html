@@ -6,6 +6,7 @@
 <title>תיעוד רכבים במוסכים</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <style>
   :root{
     --bg:#0b1220;
@@ -112,15 +113,6 @@
 <body>
 <div class="app" id="app"></div>
 <div id="toastHost"></div>
-
-<div id="cameraOverlay" style="position:fixed;inset:0;background:#000;z-index:200;display:none;flex-direction:column;">
-  <video id="cameraVideo" autoplay playsinline muted style="flex:1;width:100%;object-fit:cover;background:#000;"></video>
-  <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 20px calc(18px + env(safe-area-inset-bottom));background:rgba(0,0,0,0.7);">
-    <button class="btn btn-secondary btn-sm" onclick="closeCamera()">✕ סיום (<span id="camCount">0</span>)</button>
-    <button onclick="capturePhoto()" style="width:68px;height:68px;border-radius:50%;background:#fff;border:4px solid rgba(255,255,255,0.4);"></button>
-    <span style="width:80px"></span>
-  </div>
-</div>
 <script>
 /* ====================== IndexedDB layer ====================== */
 const DB_NAME = 'garagedocs';
@@ -248,7 +240,176 @@ async function lookupVehicle(normalizedPlate) {
   }
 }
 
-/* ====================== Toast ====================== */
+/* ====================== Google Drive integration ======================
+   OAuth (Google Identity Services, token client — לא צריך שרת backend).
+   ההרשאה מוגבלת ל-drive.file: האפליקציה יכולה לגשת רק לקבצים/תיקיות
+   שהיא עצמה יצרה, לא לכל ה-Drive של המשתמש.
+*/
+const GOOGLE_CLIENT_ID = '172861794382-6sg241brc1bck0so2lv2e1vau4pk4jnt.apps.googleusercontent.com';
+const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file';
+
+let __tokenClient = null;
+let __accessToken = null;
+let __tokenExpiresAt = 0;
+
+function getAccessToken() {
+  return new Promise((resolve, reject) => {
+    if (__accessToken && Date.now() < __tokenExpiresAt - 30000) {
+      resolve(__accessToken);
+      return;
+    }
+    if (!window.google || !google.accounts || !google.accounts.oauth2) {
+      reject(new Error('שירות ההתחברות של Google עוד לא נטען, נסה שוב בעוד רגע'));
+      return;
+    }
+    if (!__tokenClient) {
+      __tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: GOOGLE_CLIENT_ID,
+        scope: DRIVE_SCOPE,
+        callback: () => {}, // מוחלף בכל קריאה
+      });
+    }
+    __tokenClient.callback = (resp) => {
+      if (resp.error) { reject(new Error(resp.error)); return; }
+      __accessToken = resp.access_token;
+      __tokenExpiresAt = Date.now() + (resp.expires_in * 1000);
+      resolve(__accessToken);
+    };
+    __tokenClient.requestAccessToken({ prompt: __accessToken ? '' : 'consent' });
+  });
+}
+
+async function driveFetch(url, options = {}) {
+  const token = await getAccessToken();
+  const res = await fetch(url, {
+    ...options,
+    headers: { ...(options.headers || {}), Authorization: `Bearer ${token}` }
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Drive API ${res.status}: ${text.slice(0, 200)}`);
+  }
+  return res.json();
+}
+
+async function driveFindOrCreateFolder(name, parentId) {
+  const safeName = name.replace(/'/g, "\\'");
+  const parentClause = parentId ? ` and '${parentId}' in parents` : " and 'root' in parents";
+  const q = `mimeType='application/vnd.google-apps.folder' and name='${safeName}' and trashed=false${parentClause}`;
+  const listUrl = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)`;
+  const existing = await driveFetch(listUrl);
+  if (existing.files && existing.files.length > 0) return existing.files[0].id;
+
+  const metadata = {
+    name,
+    mimeType: 'application/vnd.google-apps.folder',
+    parents: parentId ? [parentId] : undefined,
+  };
+  const created = await driveFetch('https://www.googleapis.com/drive/v3/files?fields=id', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(metadata),
+  });
+  return created.id;
+}
+
+/**
+ * בונה/מוודא את מבנה תיקי רכבים/<מספר רכב>/<תאריך_מוסך>[_שעה] ומחזיר
+ * את מזהה וקישור התיקייה של האירוע הספציפי. אם אותו רכב פותח כמה תיקים
+ * (אפילו באותו יום), כל תיק מקבל תיקייה נפרדת כי השם כולל גם שעה.
+ */
+async function driveEnsureCaseFolder(plateNormalized, garageName, createdAtEpochMillis) {
+  const rootId = await driveFindOrCreateFolder('תיקי רכבים', null);
+  const plateFolderId = await driveFindOrCreateFolder(plateNormalized, rootId);
+
+  const d = new Date(createdAtEpochMillis);
+  const pad = (n) => String(n).padStart(2, '0');
+  const dateStr = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}_${pad(d.getHours())}-${pad(d.getMinutes())}`;
+  const eventFolderName = `${dateStr}_${garageName}`;
+  const eventFolderId = await driveFindOrCreateFolder(eventFolderName, plateFolderId);
+
+  return { folderId: eventFolderId, folderUrl: `https://drive.google.com/drive/folders/${eventFolderId}` };
+}
+
+async function driveUploadFile(folderId, blob, filename, mimeType) {
+  const token = await getAccessToken();
+  const metadata = { name: filename, parents: [folderId] };
+  const form = new FormData();
+  form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+  form.append('file', blob, filename);
+
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}` },
+    body: form,
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`Drive upload ${res.status}: ${text.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  return data.id;
+}
+
+/**
+ * מעלה תיק שלם ל-Drive: יוצר/מוצא את תיקיית האירוע, מעלה כל תמונה
+ * שעוד לא הועלתה + הצעת מחיר, ורק אז מוחק את הקבצים המקומיים
+ * ומעדכן את סטטוס ההעלאה. לא מסמן "הועלה" אם קובץ כלשהו נכשל.
+ */
+async function syncCaseToDrive(caseId) {
+  const c = await dbGet('cases', caseId);
+  if (!c) return;
+  await dbPut('cases', { ...c, uploadStatus: 'uploading' });
+  renderInPlace();
+
+  try {
+    let folderId = c.driveFolderId;
+    let folderUrl = c.driveFolderUrl;
+    if (!folderId) {
+      const folder = await driveEnsureCaseFolder(c.plateNormalized, c.garageName, c.createdAt);
+      folderId = folder.folderId;
+      folderUrl = folder.folderUrl;
+    }
+
+    const photos = await dbGetByIndex('photos', 'caseId', caseId);
+    let allOk = true;
+    for (const p of photos) {
+      if (p.uploaded) continue;
+      try {
+        const fileId = await driveUploadFile(folderId, p.blob, `${p.photoId}.jpg`, p.blob.type || 'image/jpeg');
+        await dbPut('photos', { ...p, uploaded: true, driveFileId: fileId });
+      } catch (e) { allOk = false; }
+    }
+
+    const quotes = await dbGetByIndex('quotes', 'caseId', caseId);
+    for (const q of quotes) {
+      if (q.uploaded) continue;
+      try {
+        const fileId = await driveUploadFile(folderId, q.blob, q.name, q.mime || q.blob.type || 'application/octet-stream');
+        await dbPut('quotes', { ...q, uploaded: true, driveFileId: fileId });
+      } catch (e) { allOk = false; }
+    }
+
+    const finalCase = await dbGet('cases', caseId);
+    await dbPut('cases', { ...finalCase, driveFolderId: folderId, driveFolderUrl: folderUrl, uploadStatus: allOk ? 'uploaded' : 'failed' });
+
+    // רק אחרי הצלחה מלאה מוחקים את הקבצים המקומיים — אין צורך להחזיק אותם פעמיים
+    if (allOk) {
+      const freshPhotos = await dbGetByIndex('photos', 'caseId', caseId);
+      for (const p of freshPhotos) await dbDelete('photos', p.photoId);
+      const freshQuotes = await dbGetByIndex('quotes', 'caseId', caseId);
+      for (const q of freshQuotes) await dbDelete('quotes', q.quoteId);
+      toast('הועלה בהצלחה לגוגל דרייב');
+    } else {
+      toast('חלק מהקבצים לא עלו — אפשר לנסות שוב');
+    }
+  } catch (e) {
+    const c2 = await dbGet('cases', caseId);
+    await dbPut('cases', { ...c2, uploadStatus: 'failed' });
+    toast('העלאה ל-Drive נכשלה: ' + e.message);
+  }
+  renderInPlace();
+}
 function toast(msg) {
   const el = document.createElement('div');
   el.className = 'toast';
@@ -385,9 +546,10 @@ async function screenNew() {
 
     <div class="card">
       <label style="display:block;font-size:13px;color:var(--text-dim);margin-bottom:10px;">תמונות (${d.photos.length})</label>
+      <input type="file" accept="image/*" capture="environment" id="cameraInput" class="hidden" onchange="onPhotoTaken(event)">
       <input type="file" accept="image/*" multiple id="galleryInput" class="hidden" onchange="onPhotoTaken(event)">
       <div class="row">
-        <button class="btn btn-secondary" onclick="openCamera()">📷 צילום</button>
+        <button class="btn btn-secondary" onclick="document.getElementById('cameraInput').click()">📷 צילום</button>
         <button class="btn btn-secondary" onclick="document.getElementById('galleryInput').click()">📤 העלאה</button>
       </div>
       <div class="gallery">
@@ -455,7 +617,7 @@ function toggleRawJson() {
 }
 
 function onPhotoTaken(e) {
-  // מבחר מהגלריה (אפשר לבחור כמה תמונות בבת אחת)
+  // מבחר מהמצלמה (תמונה אחת) או מהגלריה (אפשר לבחור כמה בבת אחת)
   const files = Array.from(e.target.files || []);
   for (const file of files) {
     __newCaseDraft.photos.push({ file, url: URL.createObjectURL(file) });
@@ -464,60 +626,6 @@ function onPhotoTaken(e) {
   renderInPlace();
 }
 function removePhoto(i) { __newCaseDraft.photos.splice(i,1); renderInPlace(); }
-
-/* ====================== Live in-page camera ======================
-   צילום ישיר דרך getUserMedia במקום אפליקציית המצלמה של המערכת —
-   כך אין מסך "אישור תמונה" אחרי כל צילום, ואפשר לצלם ברצף מהיר.
-*/
-let __cameraStream = null;
-
-async function openCamera() {
-  try {
-    __cameraStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' } },
-      audio: false
-    });
-  } catch (e) {
-    toast('לא ניתן לגשת למצלמה (' + e.message + '). אפשר לבחור תמונות מהגלריה במקום.');
-    return;
-  }
-  const video = document.getElementById('cameraVideo');
-  video.srcObject = __cameraStream;
-  document.getElementById('cameraOverlay').style.display = 'flex';
-  updateCamCount();
-}
-
-function updateCamCount() {
-  const el = document.getElementById('camCount');
-  if (el) el.textContent = __newCaseDraft.photos.length;
-}
-
-function capturePhoto() {
-  const video = document.getElementById('cameraVideo');
-  if (!video.videoWidth) return; // המצלמה עוד לא סיפקה פריים
-  const canvas = document.createElement('canvas');
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  canvas.getContext('2d').drawImage(video, 0, 0);
-  canvas.toBlob((blob) => {
-    if (!blob) return;
-    __newCaseDraft.photos.push({ file: blob, url: URL.createObjectURL(blob) });
-    updateCamCount();
-    flashShutter();
-  }, 'image/jpeg', 0.9);
-}
-
-function flashShutter() {
-  const v = document.getElementById('cameraVideo');
-  v.style.opacity = '0.4';
-  setTimeout(() => { v.style.opacity = '1'; }, 90);
-}
-
-function closeCamera() {
-  if (__cameraStream) { __cameraStream.getTracks().forEach(t => t.stop()); __cameraStream = null; }
-  document.getElementById('cameraOverlay').style.display = 'none';
-  renderInPlace();
-}
 
 function onQuoteChosen(e) {
   const file = e.target.files[0];
@@ -562,6 +670,7 @@ async function finishCase() {
     notes: d.notes || '',
     createdAt,
     status: 'completed',
+    uploadStatus: 'pending',
   });
 
   for (const p of d.photos) {
@@ -572,8 +681,9 @@ async function finishCase() {
   }
 
   __newCaseDraft = null;
-  toast('התיק נשמר בהצלחה');
+  toast('התיק נשמר, מעלה לגוגל דרייב...');
   nav('list');
+  syncCaseToDrive(caseId); // לא ממתינים — עובד ברקע, גם אם אין אינטרנט כרגע זה פשוט ייכשל ואפשר לנסות שוב מהתיק
 }
 
 async function screenDetail(caseId) {
@@ -596,20 +706,35 @@ async function screenDetail(caseId) {
       <div class="info-line"><span>מוסך</span><span>${escapeHtml(c.garageName)}</span></div>
       <div class="info-line"><span>תאריך</span><span>${formatDate(c.createdAt)}</span></div>
       <div class="info-line"><span>סטטוס</span><span class="badge badge-done">הושלם</span></div>
+      <div class="info-line"><span>גיבוי ב-Drive</span><span>${uploadStatusLabel(c.uploadStatus)}</span></div>
     </div>
 
-    <div class="card">
-      <label style="font-size:13px;color:var(--text-dim);">תמונות (${photos.length})</label>
-      <div class="gallery" id="detailGallery">
-        ${photos.map(p => `<div class="thumb"><img data-photo-id="${p.photoId}"></div>`).join('')}
-      </div>
-      ${photos.length > 0 ? `<button class="btn btn-secondary" style="margin-top:12px" onclick="sharePhotos('${caseId}')">📤 שתף תמונות</button>` : ''}
-    </div>
-
-    ${quotes.length > 0 ? `
+    ${c.uploadStatus === 'uploaded' && c.driveFolderUrl ? `
       <div class="card">
-        <label style="font-size:13px;color:var(--text-dim);">הצעת מחיר</label>
-        ${quotes.map(q => `<div class="file-chip" style="margin-top:8px"><span>📄 ${escapeHtml(q.name)}</span><button class="btn btn-secondary btn-sm" onclick="openQuote('${q.quoteId}')">פתח</button></div>`).join('')}
+        <label style="display:block;font-size:13px;color:var(--text-dim);margin-bottom:10px;">תמונות והצעת מחיר</label>
+        <div style="font-size:13px;color:var(--text-dim);margin-bottom:10px;">הועלו לגוגל דרייב ונמחקו מהמכשיר כדי לא לתפוס מקום כפול.</div>
+        <a href="${c.driveFolderUrl}" target="_blank" class="btn btn-secondary" style="text-decoration:none;">📁 פתח תיקייה בגוגל דרייב</a>
+      </div>
+    ` : `
+      <div class="card">
+        <label style="font-size:13px;color:var(--text-dim);">תמונות (${photos.length})</label>
+        <div class="gallery" id="detailGallery">
+          ${photos.map(p => `<div class="thumb"><img data-photo-id="${p.photoId}"></div>`).join('')}
+        </div>
+        ${quotes.length > 0 ? quotes.map(q => `<div class="file-chip" style="margin-top:8px"><span>📄 ${escapeHtml(q.name)}</span><button class="btn btn-secondary btn-sm" onclick="openQuote('${q.quoteId}')">פתח</button></div>`).join('') : ''}
+        ${(c.uploadStatus === 'pending' || c.uploadStatus === 'failed') ? `<button class="btn btn-success" style="margin-top:12px" onclick="syncCaseToDrive('${caseId}')">☁️ ${c.uploadStatus==='failed' ? 'נסה שוב להעלות' : 'העלה עכשיו ל-Drive'}</button>` : ''}
+        ${c.uploadStatus === 'uploading' ? `<div style="text-align:center;margin-top:10px;color:var(--text-dim);">מעלה ל-Drive...</div>` : ''}
+      </div>
+    `}
+
+    ${(photos.length > 0 || quotes.length > 0) ? `
+      <div class="card">
+        <label style="display:block;font-size:13px;color:var(--text-dim);margin-bottom:10px;">שיתוף</label>
+        <div class="row">
+          ${photos.length > 0 ? `<button class="btn btn-secondary" onclick="shareSelection('${caseId}', true, false)">📤 תמונות בלבד</button>` : ''}
+          ${quotes.length > 0 ? `<button class="btn btn-secondary" onclick="shareSelection('${caseId}', false, true)">📤 הצעת מחיר בלבד</button>` : ''}
+        </div>
+        ${(photos.length > 0 && quotes.length > 0) ? `<button class="btn btn-secondary" style="margin-top:8px" onclick="shareSelection('${caseId}', true, true)">📤 הכל יחד</button>` : ''}
       </div>
     ` : ''}
 
@@ -636,13 +761,23 @@ async function saveNotes(caseId) {
   toast('ההערות נשמרו');
 }
 
-async function sharePhotos(caseId) {
-  const photos = await dbGetByIndex('photos', 'caseId', caseId);
+async function shareSelection(caseId, includePhotos, includeQuote) {
   const c = await dbGet('cases', caseId);
-  const files = photos.map((p,i) => new File([p.blob], `photo_${i+1}.jpg`, { type: p.blob.type || 'image/jpeg' }));
+  const files = [];
+
+  if (includePhotos) {
+    const photos = await dbGetByIndex('photos', 'caseId', caseId);
+    photos.forEach((p, i) => files.push(new File([p.blob], `photo_${i + 1}.jpg`, { type: p.blob.type || 'image/jpeg' })));
+  }
+  if (includeQuote) {
+    const quotes = await dbGetByIndex('quotes', 'caseId', caseId);
+    quotes.forEach(q => files.push(new File([q.blob], q.name, { type: q.mime || q.blob.type || 'application/octet-stream' })));
+  }
+  if (files.length === 0) { toast('אין מה לשתף'); return; }
+
   if (navigator.canShare && navigator.canShare({ files })) {
     try {
-      await navigator.share({ files, title: `תמונות רכב ${formatPlate(c.plateNormalized)}`, text: `תמונות מהתיק של רכב ${formatPlate(c.plateNormalized)} - ${c.garageName}` });
+      await navigator.share({ files, title: `רכב ${formatPlate(c.plateNormalized)}`, text: `${formatPlate(c.plateNormalized)} - ${c.garageName}` });
     } catch (e) { /* המשתמש ביטל את השיתוף */ }
   } else {
     toast('שיתוף קבצים לא נתמך בדפדפן הזה — נסה מכרום באנדרואיד');
@@ -708,6 +843,14 @@ function escapeHtml(str) {
 function formatDate(ts) {
   const d = new Date(ts);
   return d.toLocaleDateString('he-IL') + ' ' + d.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'});
+}
+function uploadStatusLabel(status) {
+  switch (status) {
+    case 'uploaded': return '✅ הועלה';
+    case 'uploading': return '⏳ מעלה...';
+    case 'failed': return '⚠️ נכשל';
+    default: return '⏸ ממתין';
+  }
 }
 
 /* ====================== Render loop ====================== */
