@@ -163,15 +163,6 @@
 <div id="connBanner" class="banner banner-offline hidden" style="border-radius:0;margin:0;justify-content:center;">📴 מצב לא מקוון — הנתונים נשמרים מקומית ויועלו אוטומטית כשהחיבור יחזור</div>
 <div class="app" id="app"></div>
 <div id="toastHost"></div>
-
-<div id="cameraOverlay" style="position:fixed;inset:0;background:#000;z-index:200;display:none;flex-direction:column;">
-  <video id="cameraVideo" autoplay playsinline muted style="flex:1;width:100%;object-fit:cover;background:#000;"></video>
-  <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 20px calc(18px + env(safe-area-inset-bottom));background:rgba(0,0,0,0.7);">
-    <button class="btn btn-secondary btn-sm" onclick="closeCamera()">✕ סיום (<span id="camCount">0</span>)</button>
-    <button onclick="capturePhoto()" style="width:68px;height:68px;border-radius:50%;background:#fff;border:4px solid rgba(255,255,255,0.4);"></button>
-    <span style="width:80px"></span>
-  </div>
-</div>
 <script>
 /* ====================== IndexedDB layer ====================== */
 const DB_NAME = 'garagedocs';
@@ -802,9 +793,10 @@ async function screenNew() {
 
     <div class="card">
       <label style="display:block;font-size:13px;color:var(--text-dim);margin-bottom:10px;">תמונות (${d.photos.length})</label>
+      <input type="file" accept="image/*" capture="environment" multiple id="cameraInput" class="hidden" onchange="onPhotoTaken(event)">
       <input type="file" accept="image/*" multiple id="galleryInput" class="hidden" onchange="onPhotoTaken(event)">
       <div class="row">
-        <button class="btn btn-secondary" onclick="openCamera()">📷 צילום</button>
+        <button class="btn btn-secondary" onclick="document.getElementById('cameraInput').click()">📷 צילום</button>
         <button class="btn btn-secondary" onclick="document.getElementById('galleryInput').click()">📤 העלאה</button>
       </div>
       <div class="gallery">
@@ -884,61 +876,6 @@ function onPhotoTaken(e) {
 }
 function removePhoto(i) { __newCaseDraft.photos.splice(i,1); renderInPlace(); scheduleAutosaveDraft(); }
 
-/* ====================== Live in-page camera ======================
-   צילום ישיר דרך getUserMedia (לא אפליקציית המצלמה של המערכת) —
-   כך אין מסך "אישור תמונה" אחרי כל צילום, ואפשר לצלם ברצף מהיר
-   בלחיצה חוזרת על כפתור העיגול.
-*/
-let __cameraStream = null;
-
-async function openCamera() {
-  try {
-    __cameraStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: { ideal: 'environment' } },
-      audio: false
-    });
-  } catch (e) {
-    toast('לא ניתן לגשת למצלמה (' + e.message + '). אפשר לבחור תמונות דרך "העלאה".');
-    return;
-  }
-  const video = document.getElementById('cameraVideo');
-  video.srcObject = __cameraStream;
-  document.getElementById('cameraOverlay').style.display = 'flex';
-  updateCamCount();
-}
-
-function updateCamCount() {
-  const el = document.getElementById('camCount');
-  if (el) el.textContent = __newCaseDraft.photos.length;
-}
-
-function capturePhoto() {
-  const video = document.getElementById('cameraVideo');
-  if (!video.videoWidth) return; // המצלמה עוד לא סיפקה פריים
-  const canvas = document.createElement('canvas');
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-  canvas.getContext('2d').drawImage(video, 0, 0);
-  canvas.toBlob((blob) => {
-    if (!blob) return;
-    __newCaseDraft.photos.push({ file: blob, url: URL.createObjectURL(blob) });
-    updateCamCount();
-    flashShutter();
-    scheduleAutosaveDraft();
-  }, 'image/jpeg', 0.9);
-}
-
-function flashShutter() {
-  const v = document.getElementById('cameraVideo');
-  v.style.opacity = '0.4';
-  setTimeout(() => { v.style.opacity = '1'; }, 90);
-}
-
-function closeCamera() {
-  if (__cameraStream) { __cameraStream.getTracks().forEach(t => t.stop()); __cameraStream = null; }
-  document.getElementById('cameraOverlay').style.display = 'none';
-  renderInPlace();
-}
 
 function onQuoteChosen(e) {
   const file = e.target.files[0];
