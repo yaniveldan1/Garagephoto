@@ -157,12 +157,43 @@
     .case-item, .stat-card, .btn{transition:transform .12s ease, opacity .12s ease;}
     .case-item:active{transform:scale(0.98);}
   }
+
+  /* ---- Camera: focus ring + zoom slider ---- */
+  .focus-ring{
+    position:absolute;width:72px;height:72px;border-radius:50%;
+    border:2px solid #fff;pointer-events:none;transform:translate(-50%,-50%) scale(1.15);
+    opacity:0;transition:opacity .15s ease, transform .35s ease;
+  }
+  .focus-ring.show{opacity:1;transform:translate(-50%,-50%) scale(1);}
+  .zoom-row{
+    display:flex;align-items:center;gap:10px;padding:8px 20px;
+    background:rgba(0,0,0,0.55);
+  }
+  .zoom-row input[type=range]{flex:1;accent-color:var(--accent);}
+  .zoom-tag{color:#fff;font-size:12px;min-width:34px;text-align:center;}
 </style>
 </head>
 <body>
 <div id="connBanner" class="banner banner-offline hidden" style="border-radius:0;margin:0;justify-content:center;">📴 מצב לא מקוון — הנתונים נשמרים מקומית ויועלו אוטומטית כשהחיבור יחזור</div>
 <div class="app" id="app"></div>
 <div id="toastHost"></div>
+
+<div id="cameraOverlay" style="position:fixed;inset:0;background:#000;z-index:200;display:none;flex-direction:column;">
+  <div id="cameraPreviewWrap" style="position:relative;flex:1;overflow:hidden;">
+    <video id="cameraVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;background:#000;"></video>
+    <div id="focusRing" class="focus-ring hidden"></div>
+  </div>
+  <div id="zoomRow" class="zoom-row hidden">
+    <span class="zoom-tag">1x</span>
+    <input type="range" id="zoomSlider" min="1" max="3" step="0.1" value="1">
+    <span class="zoom-tag" id="zoomLabel">1.0x</span>
+  </div>
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 20px calc(18px + env(safe-area-inset-bottom));background:rgba(0,0,0,0.7);">
+    <button class="btn btn-secondary btn-sm" onclick="closeCamera()">✕ סיום (<span id="camCount">0</span>)</button>
+    <button onclick="capturePhoto()" style="width:68px;height:68px;border-radius:50%;background:#fff;border:4px solid rgba(255,255,255,0.4);"></button>
+    <span style="width:80px"></span>
+  </div>
+</div>
 <script>
 /* ====================== IndexedDB layer ====================== */
 const DB_NAME = 'garagedocs';
@@ -793,10 +824,9 @@ async function screenNew() {
 
     <div class="card">
       <label style="display:block;font-size:13px;color:var(--text-dim);margin-bottom:10px;">תמונות (${d.photos.length})</label>
-      <input type="file" accept="image/*" capture="environment" multiple id="cameraInput" class="hidden" onchange="onPhotoTaken(event)">
       <input type="file" accept="image/*" multiple id="galleryInput" class="hidden" onchange="onPhotoTaken(event)">
       <div class="row">
-        <button class="btn btn-secondary" onclick="document.getElementById('cameraInput').click()">📷 צילום</button>
+        <button class="btn btn-secondary" onclick="openCamera()">📷 צילום</button>
         <button class="btn btn-secondary" onclick="document.getElementById('galleryInput').click()">📤 העלאה</button>
       </div>
       <div class="gallery">
@@ -875,6 +905,242 @@ function onPhotoTaken(e) {
   scheduleAutosaveDraft();
 }
 function removePhoto(i) { __newCaseDraft.photos.splice(i,1); renderInPlace(); scheduleAutosaveDraft(); }
+
+/* ====================== Live in-page camera ======================
+   מצלמה חיה בתוך הדף (getUserMedia) — כדי לצלם ברצף מהיר בלי לצאת
+   מהדף ובלי מסך אישור בין תמונה לתמונה.
+
+   האיכות: כל צילום משתמש ב-ImageCapture.takePhoto() — זו קריאה
+   שמפעילה את "צנרת הצילום הסטילס" האמיתית של החומרה (אותה צנרת
+   שאפליקציית המצלמה של המכשיר משתמשת בה: פוקוס-חד-פעמי אמיתי,
+   הרזולוציה המלאה של החיישן), לא רק "צילום מסך" של פריים מהוידאו
+   החי. בדפדפנים/מכשירים שלא תומכים ב-API הזה, נופלים בעדינות לצילום
+   פריים מהוידאו (השיטה הישנה) כדי שזה תמיד יעבוד.
+
+   זום ופוקוס-במגע נשארים כפי שהיו — הרחבות לא-סטנדרטיות של כרום
+   לאנדרואיד, תמיד עם בדיקת תמיכה ונפילה עדינה כשאין תמיכה.
+*/
+let __cameraStream = null;
+let __videoTrack = null;
+let __imageCapture = null;
+let __cameraTargetCaseId = null;   // null = מוסיפים לטיוטת תיק חדש; אחרת = מוסיפים ישירות לתיק קיים
+let __cameraSessionCount = 0;      // כמה תמונות צולמו בסבב הנוכחי (לשימוש כשמוסיפים לתיק קיים)
+let __zoomInfo = { supported: false, hardware: false, min: 1, max: 3, step: 0.1 };
+let __digitalZoom = 1;
+let __pinchStartDist = null;
+let __pinchStartZoom = 1;
+
+async function openCamera(targetCaseId) {
+  __cameraTargetCaseId = targetCaseId || null;
+  __cameraSessionCount = 0;
+  try {
+    __cameraStream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: { ideal: 'environment' },
+        width: { ideal: 1920 },
+        height: { ideal: 1080 }
+      },
+      audio: false
+    });
+  } catch (e) {
+    toast('לא ניתן לגשת למצלמה (' + e.message + '). אפשר לבחור תמונות דרך "העלאה".');
+    return;
+  }
+  const video = document.getElementById('cameraVideo');
+  video.srcObject = __cameraStream;
+  video.style.transform = '';
+  document.getElementById('cameraOverlay').style.display = 'flex';
+  updateCamCount();
+
+  __videoTrack = __cameraStream.getVideoTracks()[0] || null;
+  __digitalZoom = 1;
+  __zoomInfo = { supported: false, hardware: false, min: 1, max: 3, step: 0.1 };
+  __imageCapture = null;
+
+  if (__videoTrack) {
+    // ImageCapture — צילום סטילס אמיתי מהחומרה (העדיפות הראשונה)
+    if (typeof ImageCapture !== 'undefined') {
+      try { __imageCapture = new ImageCapture(__videoTrack); } catch (e) { __imageCapture = null; }
+    }
+    // פוקוס אוטומטי רציף + יכולות זום, כשזמינות
+    if (__videoTrack.getCapabilities) {
+      try {
+        const caps = __videoTrack.getCapabilities();
+        if (caps.focusMode && caps.focusMode.includes('continuous')) {
+          await __videoTrack.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
+        }
+        if (caps.zoom && typeof caps.zoom.max === 'number') {
+          __zoomInfo = { supported: true, hardware: true, min: caps.zoom.min ?? 1, max: caps.zoom.max, step: caps.zoom.step || 0.1 };
+        } else {
+          __zoomInfo = { supported: true, hardware: false, min: 1, max: 3, step: 0.1 };
+        }
+      } catch (e) {
+        __zoomInfo = { supported: true, hardware: false, min: 1, max: 3, step: 0.1 };
+      }
+    } else {
+      __zoomInfo = { supported: true, hardware: false, min: 1, max: 3, step: 0.1 };
+    }
+  }
+  setupZoomSlider();
+  setupPinchAndTapToFocus();
+}
+
+function setupZoomSlider() {
+  const row = document.getElementById('zoomRow');
+  const slider = document.getElementById('zoomSlider');
+  if (!row || !slider) return;
+  row.classList.remove('hidden');
+  slider.min = __zoomInfo.min;
+  slider.max = __zoomInfo.max;
+  slider.step = __zoomInfo.step;
+  slider.value = __zoomInfo.min;
+  updateZoomLabel(__zoomInfo.min);
+  slider.oninput = (e) => applyZoom(parseFloat(e.target.value));
+}
+
+function updateZoomLabel(value) {
+  const label = document.getElementById('zoomLabel');
+  if (label) label.textContent = value.toFixed(1) + 'x';
+}
+
+async function applyZoom(value) {
+  const clamped = Math.min(__zoomInfo.max, Math.max(__zoomInfo.min, value));
+  updateZoomLabel(clamped);
+  const slider = document.getElementById('zoomSlider');
+  if (slider && parseFloat(slider.value) !== clamped) slider.value = clamped;
+
+  if (__zoomInfo.hardware && __videoTrack) {
+    try { await __videoTrack.applyConstraints({ advanced: [{ zoom: clamped }] }); return; } catch (e) { /* נופל לזום דיגיטלי */ }
+  }
+  __digitalZoom = clamped;
+  const video = document.getElementById('cameraVideo');
+  if (video) video.style.transform = `scale(${clamped})`;
+}
+
+function setupPinchAndTapToFocus() {
+  const wrap = document.getElementById('cameraPreviewWrap');
+  if (!wrap) return;
+  wrap.ontouchstart = (e) => {
+    if (e.touches.length === 2) {
+      __pinchStartDist = touchDistance(e.touches);
+      __pinchStartZoom = __zoomInfo.hardware ? parseFloat(document.getElementById('zoomSlider')?.value || __zoomInfo.min) : __digitalZoom;
+    } else if (e.touches.length === 1) {
+      showFocusRing(e.touches[0].clientX, e.touches[0].clientY);
+      attemptFocusAt(e.touches[0], wrap);
+    }
+  };
+  wrap.ontouchmove = (e) => {
+    if (e.touches.length === 2 && __pinchStartDist) {
+      e.preventDefault();
+      const dist = touchDistance(e.touches);
+      const ratio = dist / __pinchStartDist;
+      applyZoom(__pinchStartZoom * ratio);
+    }
+  };
+  wrap.ontouchend = () => { __pinchStartDist = null; };
+}
+
+function touchDistance(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.sqrt(dx * dx + dy * dy);
+}
+
+function showFocusRing(x, y) {
+  const ring = document.getElementById('focusRing');
+  const wrap = document.getElementById('cameraPreviewWrap');
+  if (!ring || !wrap) return;
+  const rect = wrap.getBoundingClientRect();
+  ring.style.left = (x - rect.left) + 'px';
+  ring.style.top = (y - rect.top) + 'px';
+  ring.classList.remove('show');
+  void ring.offsetWidth;
+  ring.classList.add('show');
+  clearTimeout(ring.__hideTimer);
+  ring.__hideTimer = setTimeout(() => ring.classList.remove('show'), 700);
+}
+
+async function attemptFocusAt(touch, wrap) {
+  if (!__videoTrack || !__videoTrack.getCapabilities) return;
+  try {
+    const caps = __videoTrack.getCapabilities();
+    if (!caps.pointsOfInterest) return;
+    const rect = wrap.getBoundingClientRect();
+    const x = (touch.clientX - rect.left) / rect.width;
+    const y = (touch.clientY - rect.top) / rect.height;
+    const advanced = [{ pointsOfInterest: [{ x, y }] }];
+    if (caps.focusMode && caps.focusMode.includes('single-shot')) advanced[0].focusMode = 'single-shot';
+    await __videoTrack.applyConstraints({ advanced }).catch(() => {});
+  } catch (e) { /* לא נתמך על המכשיר הזה */ }
+}
+
+function updateCamCount() {
+  const el = document.getElementById('camCount');
+  if (!el) return;
+  el.textContent = __cameraTargetCaseId ? __cameraSessionCount : __newCaseDraft.photos.length;
+}
+
+async function capturePhoto() {
+  const video = document.getElementById('cameraVideo');
+  if (!video.videoWidth) return;
+
+  let blob = null;
+  if (__imageCapture) {
+    try { blob = await __imageCapture.takePhoto(); } catch (e) { blob = null; } // נופל לצילום פריים מהוידאו
+  }
+  if (!blob) {
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!__zoomInfo.hardware && __digitalZoom > 1) {
+      const sw = video.videoWidth / __digitalZoom;
+      const sh = video.videoHeight / __digitalZoom;
+      const sx = (video.videoWidth - sw) / 2;
+      const sy = (video.videoHeight - sh) / 2;
+      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    } else {
+      ctx.drawImage(video, 0, 0);
+    }
+    blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', 0.9));
+  }
+  if (!blob) return;
+
+  if (__cameraTargetCaseId) {
+    await dbPut('photos', { photoId: uuid(), caseId: __cameraTargetCaseId, blob });
+    __cameraSessionCount++;
+  } else {
+    __newCaseDraft.photos.push({ file: blob, url: URL.createObjectURL(blob) });
+    scheduleAutosaveDraft();
+  }
+  updateCamCount();
+  flashShutter();
+}
+
+function flashShutter() {
+  const v = document.getElementById('cameraVideo');
+  v.style.opacity = '0.4';
+  setTimeout(() => { v.style.opacity = '1'; }, 90);
+}
+
+async function closeCamera() {
+  if (__cameraStream) { __cameraStream.getTracks().forEach(t => t.stop()); __cameraStream = null; }
+  __videoTrack = null;
+  __imageCapture = null;
+  __pinchStartDist = null;
+  document.getElementById('cameraOverlay').style.display = 'none';
+  const row = document.getElementById('zoomRow');
+  if (row) row.classList.add('hidden');
+
+  if (__cameraTargetCaseId && __cameraSessionCount > 0) {
+    await addHistoryEntry(__cameraTargetCaseId, `נוספו ${__cameraSessionCount} תמונות`);
+    await reopenForSync(__cameraTargetCaseId);
+  } else {
+    renderInPlace();
+  }
+  __cameraTargetCaseId = null;
+  __cameraSessionCount = 0;
+}
 
 
 function onQuoteChosen(e) {
@@ -1002,10 +1268,9 @@ async function screenDetail(caseId) {
           : `<div class="thumb" style="display:flex;align-items:center;justify-content:center;font-size:22px;">☁️<button class="del" onclick="deletePhotoFromCase('${caseId}','${p.photoId}')">✕</button></div>`
         ).join('')}
       </div>
-      <input type="file" accept="image/*" capture="environment" multiple id="detailCameraInput" class="hidden" onchange="onDetailPhotosAdded(event,'${caseId}')">
       <input type="file" accept="image/*" multiple id="detailGalleryInput" class="hidden" onchange="onDetailPhotosAdded(event,'${caseId}')">
       <div class="row" style="margin-top:10px">
-        <button class="btn btn-secondary" onclick="document.getElementById('detailCameraInput').click()">📷 הוסף מהמצלמה</button>
+        <button class="btn btn-secondary" onclick="openCamera('${caseId}')">📷 הוסף מהמצלמה</button>
         <button class="btn btn-secondary" onclick="document.getElementById('detailGalleryInput').click()">📤 הוסף מהגלריה</button>
       </div>
 
