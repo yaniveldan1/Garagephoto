@@ -108,9 +108,59 @@
   .file-chip{display:flex;align-items:center;justify-content:space-between;background:rgba(255,255,255,0.05);padding:10px 12px;border-radius:10px;margin-top:8px;font-size:13px;}
   .garage-row{display:flex;align-items:center;justify-content:space-between;padding:12px;border-radius:12px;background:var(--panel);border:1px solid var(--panel-border);margin-bottom:8px;}
   .hidden{display:none !important;}
+
+  /* ---- Stats row ---- */
+  .stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;}
+  .stat-card{background:var(--panel);border:1px solid var(--panel-border);border-radius:14px;padding:12px 8px;text-align:center;}
+  .stat-num{font-size:22px;font-weight:700;line-height:1.1;}
+  .stat-label{font-size:11.5px;color:var(--text-dim);margin-top:4px;}
+
+  /* ---- Colored backup-status badges ---- */
+  .status-pill{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;border-radius:999px;font-size:11.5px;font-weight:600;white-space:nowrap;}
+  .status-pending{background:rgba(255,176,32,0.18);color:var(--warn);}
+  .status-uploading{background:rgba(58,160,255,0.18);color:var(--accent);}
+  .status-uploaded{background:rgba(34,211,168,0.18);color:var(--accent2);}
+  .status-failed{background:rgba(255,92,114,0.18);color:var(--danger);}
+
+  /* ---- Case card v2 ---- */
+  .case-item{display:block;padding:14px 16px;}
+  .case-item .top-row{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;}
+  .case-item .plate{font-size:20px;letter-spacing:0.3px;}
+  .case-item .sub{color:var(--text-dim);font-size:13px;margin-top:3px;}
+  .case-item .meta-grid{display:flex;flex-wrap:wrap;gap:5px 10px;margin-top:8px;font-size:12.5px;color:var(--text-dim);}
+  .case-item .meta-grid span{display:inline-flex;align-items:center;gap:4px;}
+
+  /* ---- Quick filter chips ---- */
+  .chip-row{display:flex;gap:8px;overflow-x:auto;padding-bottom:2px;margin-bottom:14px;}
+  .chip{flex:0 0 auto;padding:8px 16px;border-radius:999px;border:1px solid var(--panel-border);background:var(--panel);color:var(--text-dim);font-size:13px;cursor:pointer;font-family:inherit;}
+  .chip.active{background:linear-gradient(135deg,var(--accent),#2e6bff);color:#06111f;border-color:transparent;font-weight:600;}
+
+  /* ---- Detail hero ---- */
+  .hero-plate{text-align:center;padding:6px 0 2px;}
+  .hero-plate .plate-big{font-size:30px;font-weight:700;letter-spacing:1px;direction:ltr;}
+  .hero-plate .plate-sub{color:var(--text-dim);font-size:14px;margin-top:4px;}
+
+  /* ---- History timeline ---- */
+  .history-item{display:flex;gap:10px;padding:8px 0;border-bottom:1px solid var(--panel-border);font-size:13.5px;}
+  .history-item:last-child{border-bottom:none;}
+  .history-item .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);margin-top:5px;flex:none;}
+  .history-item .txt{flex:1;}
+  .history-item .time{color:var(--text-dim);font-size:11.5px;margin-top:2px;}
+
+  /* ---- Draft / connection banners ---- */
+  .banner{border-radius:14px;padding:13px 14px;margin-bottom:14px;font-size:13.5px;border:1px solid;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;}
+  .banner-draft{background:rgba(58,160,255,0.1);border-color:rgba(58,160,255,0.35);}
+  .banner-offline{background:rgba(255,176,32,0.1);border-color:rgba(255,176,32,0.35);color:var(--warn);}
+  .banner p{margin:0;flex:1 1 200px;}
+  #connBanner{position:sticky;top:0;z-index:9;}
+  @media (prefers-reduced-motion:no-preference){
+    .case-item, .stat-card, .btn{transition:transform .12s ease, opacity .12s ease;}
+    .case-item:active{transform:scale(0.98);}
+  }
 </style>
 </head>
 <body>
+<div id="connBanner" class="banner banner-offline hidden" style="border-radius:0;margin:0;justify-content:center;">📴 מצב לא מקוון — הנתונים נשמרים מקומית ויועלו אוטומטית כשהחיבור יחזור</div>
 <div class="app" id="app"></div>
 <div id="toastHost"></div>
 
@@ -125,7 +175,7 @@
 <script>
 /* ====================== IndexedDB layer ====================== */
 const DB_NAME = 'garagedocs';
-const DB_VERSION = 1;
+const DB_VERSION = 2; // v2: added 'drafts' store for auto-saved in-progress cases (existing stores untouched)
 let dbPromise = new Promise((resolve, reject) => {
   const req = indexedDB.open(DB_NAME, DB_VERSION);
   req.onupgradeneeded = (e) => {
@@ -143,6 +193,9 @@ let dbPromise = new Promise((resolve, reject) => {
     if (!db.objectStoreNames.contains('quotes')) {
       const s = db.createObjectStore('quotes', { keyPath: 'quoteId' });
       s.createIndex('caseId', 'caseId');
+    }
+    if (!db.objectStoreNames.contains('drafts')) {
+      db.createObjectStore('drafts', { keyPath: 'id' });
     }
   };
   req.onsuccess = () => resolve(req.result);
@@ -423,13 +476,16 @@ async function syncCaseToDrive(caseId) {
       const freshQuotes = await dbGetByIndex('quotes', 'caseId', caseId);
       for (const q of freshQuotes) { const { blob, ...rest } = q; await dbPut('quotes', rest); }
       toast('הועלה בהצלחה לגוגל דרייב');
+      await addHistoryEntry(caseId, 'התבצע גיבוי ל-Google Drive');
     } else {
       toast('חלק מהקבצים לא עלו — אפשר לנסות שוב');
+      await addHistoryEntry(caseId, 'הגיבוי נכשל (חלק מהקבצים)');
     }
   } catch (e) {
     const c2 = await dbGet('cases', caseId);
     await dbPut('cases', { ...c2, uploadStatus: 'failed' });
     toast('העלאה ל-Drive נכשלה: ' + e.message);
+    await addHistoryEntry(caseId, 'הגיבוי נכשל: ' + e.message);
   }
   renderInPlace();
 }
@@ -441,6 +497,136 @@ function toast(msg) {
   setTimeout(() => el.remove(), 2600);
 }
 
+/* ====================== Activity history ======================
+   כל תיק שומר מערך history עם אירועים אמיתיים בלבד (לא מדומים).
+   שדה אופציונלי — תיקים ישנים בלי history פשוט יוצגו עם רשימה ריקה.
+*/
+async function addHistoryEntry(caseId, text) {
+  const c = await dbGet('cases', caseId);
+  if (!c) return;
+  const history = Array.isArray(c.history) ? c.history.slice() : [];
+  history.push({ ts: Date.now(), text });
+  await dbPut('cases', { ...c, history });
+}
+
+/* ====================== Colored backup-status badge ====================== */
+function statusPill(status) {
+  switch (status) {
+    case 'uploaded': return `<span class="status-pill status-uploaded">🟢 גובה ל-Drive</span>`;
+    case 'uploading': return `<span class="status-pill status-uploading">🔵 מתבצע גיבוי</span>`;
+    case 'failed': return `<span class="status-pill status-failed">🔴 שגיאה בגיבוי</span>`;
+    default: return `<span class="status-pill status-pending">🟠 ממתין לגיבוי</span>`;
+  }
+}
+
+/* ====================== Date quick-filter ====================== */
+function matchesDateFilter(createdAt, filter) {
+  if (!filter || filter === 'all') return true;
+  const now = new Date();
+  const d = new Date(createdAt);
+  if (filter === 'today') {
+    return d.toDateString() === now.toDateString();
+  }
+  if (filter === 'week') {
+    const weekAgo = new Date(now); weekAgo.setDate(now.getDate() - 7);
+    return d >= weekAgo;
+  }
+  if (filter === 'month') {
+    const monthAgo = new Date(now); monthAgo.setMonth(now.getMonth() - 1);
+    return d >= monthAgo;
+  }
+  return true;
+}
+
+/* ====================== Draft autosave ======================
+   נשמר ב-IndexedDB (store נפרד 'drafts', לא נוגע ב-store של cases) כדי
+   שגם תמונות/הצעת מחיר (Blob) ישרדו סגירה של האפליקציה. נשמר תחת מפתח
+   קבוע 'current' — יש לכל היותר טיוטה פתוחה אחת בכל רגע נתון.
+*/
+let __draftSaveTimer = null;
+function scheduleAutosaveDraft() {
+  clearTimeout(__draftSaveTimer);
+  __draftSaveTimer = setTimeout(autosaveDraftNow, 400);
+}
+async function autosaveDraftNow() {
+  if (!__newCaseDraft) return;
+  const d = __newCaseDraft;
+  const hasContent = d.plateInput || d.garageId || d.notes || d.photos.length || d.quote || d.lookup;
+  if (!hasContent) return;
+  try {
+    await dbPut('drafts', {
+      id: 'current',
+      plateInput: d.plateInput,
+      lookup: d.lookup,
+      garageId: d.garageId,
+      notes: d.notes,
+      manual: d.manual,
+      photos: d.photos.map(p => ({ blob: p.file })),
+      quote: d.quote ? { blob: d.quote.file, name: d.quote.name, mime: d.quote.mime } : null,
+      updatedAt: Date.now(),
+    });
+  } catch (e) { /* שמירת טיוטה היא best-effort — לא חוסמת את העבודה השוטפת */ }
+}
+async function checkForDraft() {
+  try { return await dbGet('drafts', 'current'); } catch (e) { return null; }
+}
+async function resumeDraft() {
+  const saved = await checkForDraft();
+  if (!saved) return;
+  __newCaseDraft = {
+    plateInput: saved.plateInput || '',
+    lookup: saved.lookup || null,
+    lookupLoading: false,
+    garageId: saved.garageId || '',
+    photos: (saved.photos || []).map(p => ({ file: p.blob, url: URL.createObjectURL(p.blob) })),
+    quote: saved.quote ? { file: saved.quote.blob, name: saved.quote.name, mime: saved.quote.mime } : null,
+    notes: saved.notes || '',
+    manual: saved.manual || { manufacturer:'', model:'', year:'', color:'', fuel:'' },
+  };
+  nav('new');
+}
+async function discardDraft() {
+  try {
+    const existing = await dbGet('drafts', 'current');
+    if (existing) await dbDelete('drafts', 'current');
+  } catch (e) {}
+  toast('הטיוטה נמחקה');
+  renderInPlace();
+}
+async function clearDraftSilently() {
+  try {
+    const existing = await dbGet('drafts', 'current');
+    if (existing) await dbDelete('drafts', 'current');
+  } catch (e) {}
+}
+
+/* ====================== Online / Offline ======================
+   לא גורם ל-render() מלא (כדי לא לאבד פוקוס בשדה טקסט) — מעדכן ישירות
+   את הבאנר, ובחזרה לרשת מנסה להעלות תיקים שממתינים/נכשלו.
+*/
+function updateConnectionBanner() {
+  const el = document.getElementById('connBanner');
+  if (!el) return;
+  el.classList.toggle('hidden', navigator.onLine);
+}
+let __autoSyncing = false;
+async function autoSyncPendingCases() {
+  if (__autoSyncing) return;
+  __autoSyncing = true;
+  try {
+    const cases = await dbGetAll('cases');
+    const pending = cases.filter(c => c.uploadStatus === 'pending' || c.uploadStatus === 'failed');
+    for (const c of pending) {
+      if (!navigator.onLine) break;
+      await syncCaseToDrive(c.caseId);
+    }
+  } finally {
+    __autoSyncing = false;
+  }
+}
+window.addEventListener('online', () => { updateConnectionBanner(); toast('החיבור חזר — מנסה להעלות תיקים ממתינים'); autoSyncPendingCases(); });
+window.addEventListener('offline', updateConnectionBanner);
+
 /* ====================== Router / State ====================== */
 let route = { screen: 'list' };
 function nav(screen, params) { route = { screen, ...(params||{}) }; render(); window.scrollTo(0,0); }
@@ -450,8 +636,16 @@ function nav(screen, params) { route = { screen, ...(params||{}) }; render(); wi
 async function screenList() {
   const cases = (await dbGetAll('cases')).sort((a,b) => b.createdAt - a.createdAt);
   const garages = await dbGetAll('garages');
+  const photoCounts = await countPhotosByCase();
   const search = (window.__searchTerm || '').trim();
   const filterGarage = window.__filterGarage || '';
+  const filterDate = window.__filterDate || 'all';
+  const draft = await checkForDraft();
+
+  // --- סטטיסטיקות אמיתיות, מחושבות מהנתונים בפועל ---
+  const totalCount = cases.length;
+  const openCount = cases.filter(c => c.status !== 'completed').length;
+  const pendingBackupCount = cases.filter(c => c.uploadStatus !== 'uploaded').length;
 
   const filtered = cases.filter(c => {
     const matchesSearch = !search ||
@@ -460,17 +654,38 @@ async function screenList() {
       (c.manufacturer || '').includes(search) ||
       (c.model || '').includes(search);
     const matchesGarage = !filterGarage || c.garageId === filterGarage;
-    return matchesSearch && matchesGarage;
+    const matchesDate = matchesDateFilter(c.createdAt, filterDate);
+    return matchesSearch && matchesGarage && matchesDate;
   });
+
+  const dateChips = [
+    ['all','הכל'], ['today','היום'], ['week','השבוע'], ['month','החודש']
+  ];
 
   return `
     <header class="top">
-      <h1>תיעוד רכבים</h1>
+      <h1>תיקי רכבים</h1>
       <button class="icon-btn" onclick="nav('garages')">🏢 מוסכים</button>
     </header>
 
+    ${draft ? `
+      <div class="banner banner-draft">
+        <p>📝 נמצאה טיוטה של תיק שלא הושלם (${formatDate(draft.updatedAt)})</p>
+        <div class="row" style="flex:none;gap:8px;width:auto;">
+          <button class="btn btn-primary btn-sm" onclick="resumeDraft()">המשך</button>
+          <button class="btn btn-danger btn-sm" onclick="discardDraft()">מחק</button>
+        </div>
+      </div>
+    ` : ''}
+
+    <div class="stats-row">
+      <div class="stat-card"><div class="stat-num">${totalCount}</div><div class="stat-label">סה״כ תיקים</div></div>
+      <div class="stat-card"><div class="stat-num">${openCount}</div><div class="stat-label">תיקים פתוחים</div></div>
+      <div class="stat-card"><div class="stat-num">${pendingBackupCount}</div><div class="stat-label">ממתינים לגיבוי</div></div>
+    </div>
+
     <div class="field">
-      <input type="search" id="searchInput" placeholder="🔍 חיפוש לפי מספר רכב, מוסך או דגם" value="${escapeHtml(search)}">
+      <input type="search" id="searchInput" placeholder="🔍 חיפוש לפי מספר רכב, מוסך, יצרן או דגם" value="${escapeHtml(search)}">
     </div>
     <div class="field">
       <select id="garageFilter">
@@ -478,16 +693,24 @@ async function screenList() {
         ${garages.map(g => `<option value="${g.garageId}" ${g.garageId===filterGarage?'selected':''}>${escapeHtml(g.name)}</option>`).join('')}
       </select>
     </div>
+    <div class="chip-row">
+      ${dateChips.map(([val,label]) => `<button type="button" class="chip ${filterDate===val?'active':''}" data-date="${val}">${label}</button>`).join('')}
+    </div>
 
-    ${filtered.length === 0 ? `<div class="empty">אין עדיין תיקים${search||filterGarage ? ' התואמים לחיפוש' : ''}.<br>לחץ על "+ תיק חדש" למטה כדי להתחיל.</div>` : ''}
+    ${filtered.length === 0 ? `<div class="empty">אין עדיין תיקים${search||filterGarage||filterDate!=='all' ? ' התואמים לחיפוש' : ''}.<br>לחץ על "+ תיק חדש" למטה כדי להתחיל.</div>` : ''}
 
     ${filtered.map(c => `
       <div class="case-item" onclick="nav('detail',{caseId:'${c.caseId}'})">
-        <div>
+        <div class="top-row">
           <div class="plate">${formatPlate(c.plateNormalized)}</div>
-          <div class="meta">${[c.manufacturer, c.model].filter(Boolean).join(' ') || 'ללא נתוני רכב'} · ${escapeHtml(c.garageName)} · ${formatDate(c.createdAt)}</div>
+          ${statusPill(c.uploadStatus)}
         </div>
-        <span class="badge ${c.status==='completed'?'badge-done':'badge-open'}">${c.status==='completed'?'הושלם':'פתוח'}</span>
+        <div class="sub">${[c.manufacturer, c.model].filter(Boolean).join(' ') || 'ללא נתוני רכב'}</div>
+        <div class="meta-grid">
+          <span>🏢 ${escapeHtml(c.garageName)}</span>
+          <span>📅 ${formatDate(c.createdAt)}</span>
+          <span>📷 ${photoCounts[c.caseId] || 0} תמונות</span>
+        </div>
       </div>
     `).join('')}
 
@@ -495,11 +718,21 @@ async function screenList() {
   `;
 }
 
+async function countPhotosByCase() {
+  const photos = await dbGetAll('photos');
+  const counts = {};
+  for (const p of photos) counts[p.caseId] = (counts[p.caseId] || 0) + 1;
+  return counts;
+}
+
 function bindListEvents() {
   const s = document.getElementById('searchInput');
   const g = document.getElementById('garageFilter');
   if (s) s.oninput = (e) => { window.__searchTerm = e.target.value; renderInPlace(); };
   if (g) g.onchange = (e) => { window.__filterGarage = e.target.value; renderInPlace(); };
+  document.querySelectorAll('.chip[data-date]').forEach(btn => {
+    btn.onclick = () => { window.__filterDate = btn.dataset.date; renderInPlace(); };
+  });
 }
 
 let __newCaseDraft = null;
@@ -606,11 +839,11 @@ async function screenNew() {
 
 function bindNewCaseEvents() {
   const p = document.getElementById('plateInput');
-  if (p) p.oninput = (e) => { __newCaseDraft.plateInput = e.target.value; };
+  if (p) p.oninput = (e) => { __newCaseDraft.plateInput = e.target.value; scheduleAutosaveDraft(); };
   const g = document.getElementById('garageSelect');
-  if (g) g.onchange = (e) => { __newCaseDraft.garageId = e.target.value; };
+  if (g) g.onchange = (e) => { __newCaseDraft.garageId = e.target.value; scheduleAutosaveDraft(); };
   const n = document.getElementById('notesInput');
-  if (n) n.oninput = (e) => { __newCaseDraft.notes = e.target.value; };
+  if (n) n.oninput = (e) => { __newCaseDraft.notes = e.target.value; scheduleAutosaveDraft(); };
 
   const manualFields = [
     ['manManufacturer','manufacturer'], ['manModel','model'], ['manYear','year'],
@@ -618,7 +851,7 @@ function bindNewCaseEvents() {
   ];
   for (const [id, key] of manualFields) {
     const el = document.getElementById(id);
-    if (el) el.oninput = (e) => { __newCaseDraft.manual[key] = e.target.value; };
+    if (el) el.oninput = (e) => { __newCaseDraft.manual[key] = e.target.value; scheduleAutosaveDraft(); };
   }
 }
 
@@ -631,6 +864,7 @@ async function doLookup() {
   __newCaseDraft.lookup = result;
   __newCaseDraft.lookupLoading = false;
   renderInPlace();
+  scheduleAutosaveDraft();
 }
 
 function toggleRawJson() {
@@ -646,8 +880,9 @@ function onPhotoTaken(e) {
   }
   e.target.value = '';
   renderInPlace();
+  scheduleAutosaveDraft();
 }
-function removePhoto(i) { __newCaseDraft.photos.splice(i,1); renderInPlace(); }
+function removePhoto(i) { __newCaseDraft.photos.splice(i,1); renderInPlace(); scheduleAutosaveDraft(); }
 
 /* ====================== Live in-page camera ======================
    צילום ישיר דרך getUserMedia (לא אפליקציית המצלמה של המערכת) —
@@ -689,6 +924,7 @@ function capturePhoto() {
     __newCaseDraft.photos.push({ file: blob, url: URL.createObjectURL(blob) });
     updateCamCount();
     flashShutter();
+    scheduleAutosaveDraft();
   }, 'image/jpeg', 0.9);
 }
 
@@ -710,11 +946,13 @@ function onQuoteChosen(e) {
   __newCaseDraft.quote = { file, name: file.name, mime: file.type };
   e.target.value = '';
   renderInPlace();
+  scheduleAutosaveDraft();
 }
-function removeQuote() { __newCaseDraft.quote = null; renderInPlace(); }
+function removeQuote() { __newCaseDraft.quote = null; renderInPlace(); scheduleAutosaveDraft(); }
 
 function cancelNewCase() {
   __newCaseDraft = null;
+  clearDraftSilently();
   nav('list');
 }
 
@@ -757,7 +995,12 @@ async function finishCase() {
     await dbPut('quotes', { quoteId: uuid(), caseId, blob: d.quote.file, name: d.quote.name, mime: d.quote.mime });
   }
 
+  await addHistoryEntry(caseId, 'התיק נפתח');
+  if (d.photos.length) await addHistoryEntry(caseId, `נוספו ${d.photos.length} תמונות`);
+  if (d.quote) await addHistoryEntry(caseId, 'נוספה הצעת מחיר');
+
   __newCaseDraft = null;
+  await clearDraftSilently();
   toast('התיק נשמר, מעלה לגוגל דרייב...');
   nav('list');
   syncCaseToDrive(caseId); // לא ממתינים — עובד ברקע, גם אם אין אינטרנט כרגע זה פשוט ייכשל ואפשר לנסות שוב מהתיק
@@ -775,6 +1018,12 @@ async function screenDetail(caseId) {
       <h1>${formatPlate(c.plateNormalized)}</h1>
       <span></span>
     </header>
+
+    <div class="card hero-plate">
+      <div class="plate-big">${formatPlate(c.plateNormalized)}</div>
+      <div class="plate-sub">${[c.manufacturer, c.model].filter(Boolean).join(' ') || 'ללא נתוני רכב'}</div>
+      <div style="margin-top:8px;">${statusPill(c.uploadStatus)}</div>
+    </div>
 
     <div class="card">
       <div class="info-line"><span>רכב</span><span>${[c.manufacturer,c.model].filter(Boolean).join(' ') || 'לא נמצא במאגר'}</span></div>
@@ -826,6 +1075,16 @@ async function screenDetail(caseId) {
     </div>
 
     <div class="card">
+      <label style="display:block;font-size:13px;color:var(--text-dim);margin-bottom:6px;">היסטוריית פעולות</label>
+      ${(c.history && c.history.length) ? c.history.slice().reverse().map(h => `
+        <div class="history-item">
+          <div class="dot"></div>
+          <div class="txt">${escapeHtml(h.text)}<div class="time">${formatDate(h.ts)}</div></div>
+        </div>
+      `).join('') : `<div style="color:var(--text-dim);font-size:13px;">אין עדיין פעולות רשומות עבור תיק זה.</div>`}
+    </div>
+
+    <div class="card">
       <button class="btn btn-danger" onclick="deleteCase('${caseId}')">🗑 מחק תיק לצמיתות</button>
     </div>
   `;
@@ -837,6 +1096,10 @@ async function afterDetailRender(caseId) {
     if (!p.blob) continue;
     const img = document.querySelector(`img[data-photo-id="${p.photoId}"]`);
     if (img) img.src = URL.createObjectURL(p.blob);
+  }
+  const notesEl = document.getElementById('detailNotes');
+  if (notesEl) {
+    notesEl.oninput = () => { __dirtyNotesCaseId = caseId; scheduleAutosaveNotes(caseId); };
   }
 }
 
@@ -884,8 +1147,46 @@ async function saveNotes(caseId) {
   const c = await dbGet('cases', caseId);
   c.notes = document.getElementById('detailNotes').value;
   await dbPut('cases', c);
+  __dirtyNotesCaseId = null;
   toast('ההערות נשמרו');
 }
+
+/* ====================== Silent notes autosave ======================
+   רשת ביטחון נוספת: אם המשתמש כתב הערה בתוך תיק קיים ויצא בלי ללחוץ
+   "שמור הערות", הטקסט עדיין נשמר ברקע (בלי טוסט, כדי לא להציף).
+   הכפתור הידני ממשיך לעבוד בדיוק כפי שהיה.
+*/
+let __dirtyNotesCaseId = null;
+let __notesSaveTimer = null;
+function scheduleAutosaveNotes(caseId) {
+  clearTimeout(__notesSaveTimer);
+  __notesSaveTimer = setTimeout(() => autosaveNotesNow(caseId), 500);
+}
+async function autosaveNotesNow(caseId) {
+  const el = document.getElementById('detailNotes');
+  if (!el) return;
+  const c = await dbGet('cases', caseId);
+  if (!c || c.notes === el.value) return;
+  await dbPut('cases', { ...c, notes: el.value });
+  __dirtyNotesCaseId = null;
+}
+
+/* ====================== Flush on sudden exit ======================
+   'visibilitychange' (hidden) ו-'pagehide' יורים גם כשהמשתמש עובר
+   אפליקציה, נועל מסך, או שהמערכת סוגרת את הטאב/אפליקציה בלי אזהרה —
+   אמינים בהרבה מ-beforeunload באנדרואיד. בשני המקרים מבצעים שמירה
+   מיידית (בלי להמתין ל-debounce) של הטיוטה הפתוחה ושל הערות שלא נשמרו.
+*/
+function flushUnsavedWork() {
+  clearTimeout(__draftSaveTimer);
+  autosaveDraftNow();
+  if (__dirtyNotesCaseId) {
+    clearTimeout(__notesSaveTimer);
+    autosaveNotesNow(__dirtyNotesCaseId);
+  }
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden) flushUnsavedWork(); });
+window.addEventListener('pagehide', flushUnsavedWork);
 
 
 async function shareSelection(caseId, includePhotos, includeQuote) {
@@ -1018,6 +1319,7 @@ function afterRender() {
   if (route.screen === 'detail') afterDetailRender(route.caseId);
 }
 
+updateConnectionBanner();
 render();
 
 </script>
