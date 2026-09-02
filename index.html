@@ -948,6 +948,8 @@ async function screenDetail(caseId) {
   if (!c) { nav('list'); return ''; }
   const photos = await dbGetByIndex('photos', 'caseId', caseId);
   const quotes = await dbGetByIndex('quotes', 'caseId', caseId);
+  const garages = await dbGetAll('garages');
+  const isEditing = window.__editingCaseId === caseId;
 
   return `
     <header class="top">
@@ -963,13 +965,33 @@ async function screenDetail(caseId) {
     </div>
 
     <div class="card">
-      <div class="info-line"><span>רכב</span><span>${[c.manufacturer,c.model].filter(Boolean).join(' ') || 'לא נמצא במאגר'}</span></div>
-      ${c.year ? `<div class="info-line"><span>שנת ייצור</span><span>${escapeHtml(c.year)}</span></div>` : ''}
-      ${c.color ? `<div class="info-line"><span>צבע</span><span>${escapeHtml(c.color)}</span></div>` : ''}
-      <div class="info-line"><span>מוסך</span><span>${escapeHtml(c.garageName)}</span></div>
-      <div class="info-line"><span>תאריך</span><span>${formatDate(c.createdAt)}</span></div>
-      <div class="info-line"><span>סטטוס</span><span class="badge badge-done">הושלם</span></div>
-      <div class="info-line"><span>גיבוי ב-Drive</span><span>${uploadStatusLabel(c.uploadStatus)}</span></div>
+      ${!isEditing ? `
+        <div class="info-line"><span>רכב</span><span>${[c.manufacturer,c.model].filter(Boolean).join(' ') || 'לא נמצא במאגר'}</span></div>
+        ${c.year ? `<div class="info-line"><span>שנת ייצור</span><span>${escapeHtml(c.year)}</span></div>` : ''}
+        ${c.color ? `<div class="info-line"><span>צבע</span><span>${escapeHtml(c.color)}</span></div>` : ''}
+        ${c.fuel ? `<div class="info-line"><span>סוג דלק</span><span>${escapeHtml(c.fuel)}</span></div>` : ''}
+        <div class="info-line"><span>מוסך</span><span>${escapeHtml(c.garageName)}</span></div>
+        <div class="info-line"><span>תאריך</span><span>${formatDate(c.createdAt)}</span></div>
+        <div class="info-line"><span>סטטוס</span><span class="badge badge-done">הושלם</span></div>
+        <div class="info-line"><span>גיבוי ב-Drive</span><span>${uploadStatusLabel(c.uploadStatus)}</span></div>
+        <button class="btn btn-secondary btn-sm" style="margin-top:10px" onclick="toggleEditVehicle('${caseId}')">✏️ ערוך פרטי רכב</button>
+      ` : `
+        <div class="field"><label>יצרן</label><input type="text" id="editManufacturer" value="${escapeHtml(c.manufacturer || '')}"></div>
+        <div class="field"><label>דגם</label><input type="text" id="editModel" value="${escapeHtml(c.model || '')}"></div>
+        <div class="field"><label>שנת ייצור</label><input type="text" inputmode="numeric" id="editYear" value="${escapeHtml(c.year || '')}"></div>
+        <div class="field"><label>צבע</label><input type="text" id="editColor" value="${escapeHtml(c.color || '')}"></div>
+        <div class="field"><label>סוג דלק</label><input type="text" id="editFuel" value="${escapeHtml(c.fuel || '')}"></div>
+        <div class="field" style="margin-bottom:0">
+          <label>מוסך</label>
+          <select id="editGarage">
+            ${garages.map(g => `<option value="${g.garageId}" ${g.garageId===c.garageId?'selected':''}>${escapeHtml(g.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn btn-success" onclick="saveVehicleEdit('${caseId}')">שמור שינויים</button>
+          <button class="btn btn-secondary" onclick="cancelEditVehicle()">ביטול</button>
+        </div>
+      `}
     </div>
 
     <div class="card">
@@ -980,6 +1002,13 @@ async function screenDetail(caseId) {
           : `<div class="thumb" style="display:flex;align-items:center;justify-content:center;font-size:22px;">☁️<button class="del" onclick="deletePhotoFromCase('${caseId}','${p.photoId}')">✕</button></div>`
         ).join('')}
       </div>
+      <input type="file" accept="image/*" capture="environment" multiple id="detailCameraInput" class="hidden" onchange="onDetailPhotosAdded(event,'${caseId}')">
+      <input type="file" accept="image/*" multiple id="detailGalleryInput" class="hidden" onchange="onDetailPhotosAdded(event,'${caseId}')">
+      <div class="row" style="margin-top:10px">
+        <button class="btn btn-secondary" onclick="document.getElementById('detailCameraInput').click()">📷 הוסף מהמצלמה</button>
+        <button class="btn btn-secondary" onclick="document.getElementById('detailGalleryInput').click()">📤 הוסף מהגלריה</button>
+      </div>
+
       ${quotes.length > 0 ? quotes.map(q => `
         <div class="file-chip" style="margin-top:8px">
           <span>📄 ${escapeHtml(q.name)}</span>
@@ -989,6 +1018,9 @@ async function screenDetail(caseId) {
           </div>
         </div>
       `).join('') : ''}
+      <input type="file" accept="application/pdf,image/jpeg,image/png" id="detailQuoteInput" class="hidden" onchange="onDetailQuoteAdded(event,'${caseId}')">
+      <button class="btn btn-secondary btn-sm" style="margin-top:8px" onclick="document.getElementById('detailQuoteInput').click()">➕ הוסף הצעת מחיר</button>
+
       ${c.driveFolderUrl ? `<a href="${c.driveFolderUrl}" target="_blank" class="btn btn-secondary" style="margin-top:12px;text-decoration:none;">📁 פתח תיקייה בגוגל דרייב</a>` : ''}
       ${(c.uploadStatus === 'pending' || c.uploadStatus === 'failed') ? `<button class="btn btn-success" style="margin-top:12px" onclick="syncCaseToDrive('${caseId}')">☁️ ${c.uploadStatus==='failed' ? 'נסה שוב להעלות' : 'העלה עכשיו ל-Drive'}</button>` : ''}
       ${c.uploadStatus === 'uploading' ? `<div style="text-align:center;margin-top:10px;color:var(--text-dim);">מעלה ל-Drive...</div>` : ''}
@@ -1025,6 +1057,62 @@ async function screenDetail(caseId) {
       <button class="btn btn-danger" onclick="deleteCase('${caseId}')">🗑 מחק תיק לצמיתות</button>
     </div>
   `;
+}
+
+function toggleEditVehicle(caseId) { window.__editingCaseId = caseId; renderInPlace(); }
+function cancelEditVehicle() { window.__editingCaseId = null; renderInPlace(); }
+
+async function saveVehicleEdit(caseId) {
+  const c = await dbGet('cases', caseId);
+  if (!c) return;
+  const garages = await dbGetAll('garages');
+  const garageId = document.getElementById('editGarage').value;
+  const garage = garages.find(g => g.garageId === garageId);
+  c.manufacturer = document.getElementById('editManufacturer').value.trim() || null;
+  c.model = document.getElementById('editModel').value.trim() || null;
+  c.year = document.getElementById('editYear').value.trim() || null;
+  c.color = document.getElementById('editColor').value.trim() || null;
+  c.fuel = document.getElementById('editFuel').value.trim() || null;
+  c.garageId = garageId;
+  c.garageName = garage ? garage.name : c.garageName;
+  await dbPut('cases', c);
+  await addHistoryEntry(caseId, 'פרטי הרכב עודכנו ידנית');
+  window.__editingCaseId = null;
+  toast('הפרטים עודכנו');
+  renderInPlace();
+}
+
+/* הוספת תמונות/הצעת מחיר לתיק שכבר נשמר — אם התיק כבר הועלה ל-Drive,
+   מסמנים אותו שוב כ'ממתין' כדי שהקבצים החדשים בלבד יעלו (syncCaseToDrive
+   כבר מדלג על קבצים שסומנו uploaded, כך שזה בטוח להריץ שוב). */
+async function onDetailPhotosAdded(e, caseId) {
+  const files = Array.from(e.target.files || []);
+  e.target.value = '';
+  if (files.length === 0) return;
+  for (const file of files) {
+    await dbPut('photos', { photoId: uuid(), caseId, blob: file });
+  }
+  await addHistoryEntry(caseId, `נוספו ${files.length} תמונות`);
+  await reopenForSync(caseId);
+}
+
+async function onDetailQuoteAdded(e, caseId) {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  await dbPut('quotes', { quoteId: uuid(), caseId, blob: file, name: file.name, mime: file.type });
+  await addHistoryEntry(caseId, 'נוספה הצעת מחיר');
+  await reopenForSync(caseId);
+}
+
+async function reopenForSync(caseId) {
+  const c = await dbGet('cases', caseId);
+  if (c && c.uploadStatus !== 'uploading') {
+    await dbPut('cases', { ...c, uploadStatus: 'pending' });
+  }
+  toast('נשמר, מעלה לגוגל דרייב...');
+  renderInPlace();
+  syncCaseToDrive(caseId);
 }
 
 async function afterDetailRender(caseId) {
