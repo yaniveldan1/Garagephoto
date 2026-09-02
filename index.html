@@ -171,6 +171,10 @@
   }
   .zoom-row input[type=range]{flex:1;accent-color:var(--accent);}
   .zoom-tag{color:#fff;font-size:12px;min-width:34px;text-align:center;}
+  #torchBtn.active{background:var(--warn);color:#1a1200;}
+  #captureBtn.recording{background:var(--danger);border-color:rgba(255,92,114,0.4);animation:pulse-rec 1.1s ease-in-out infinite;}
+  @keyframes pulse-rec{0%,100%{transform:scale(1);}50%{transform:scale(1.08);}}
+  .vid-badge{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:20px;pointer-events:none;text-shadow:0 1px 3px rgba(0,0,0,0.6);}
 </style>
 </head>
 <body>
@@ -183,6 +187,10 @@
     <video id="cameraVideo" autoplay playsinline muted style="width:100%;height:100%;object-fit:cover;background:#000;"></video>
     <div id="focusRing" class="focus-ring hidden"></div>
   </div>
+  <div id="cameraToolsRow" style="display:flex;justify-content:center;gap:10px;padding:8px 0;background:rgba(0,0,0,0.55);">
+    <button id="torchBtn" class="btn btn-secondary btn-sm hidden" onclick="toggleTorch()">🔦 פלאש</button>
+    <button id="modeBtn" class="btn btn-secondary btn-sm" onclick="toggleCameraMode()">🎥 מעבר לוידאו</button>
+  </div>
   <div id="zoomRow" class="zoom-row hidden">
     <span class="zoom-tag">1x</span>
     <input type="range" id="zoomSlider" min="1" max="3" step="0.1" value="1">
@@ -190,12 +198,15 @@
   </div>
   <div style="display:flex;align-items:center;justify-content:space-between;padding:18px 20px calc(18px + env(safe-area-inset-bottom));background:rgba(0,0,0,0.7);">
     <button class="btn btn-secondary btn-sm" onclick="closeCamera()">✕ סיום (<span id="camCount">0</span>)</button>
-    <button onclick="capturePhoto()" style="width:68px;height:68px;border-radius:50%;background:#fff;border:4px solid rgba(255,255,255,0.4);"></button>
+    <button id="captureBtn" onclick="onCaptureTap()" style="width:68px;height:68px;border-radius:50%;background:#fff;border:4px solid rgba(255,255,255,0.4);"></button>
     <span style="width:80px"></span>
   </div>
 </div>
 <script>
 /* ====================== IndexedDB layer ====================== */
+// גרסת האפליקציה — לעדכן ידנית בכל שינוי מהותי, כדי לדעת בקלות אם המכשיר מריץ את הגרסה העדכנית.
+const APP_VERSION = '1.2';
+
 const DB_NAME = 'garagedocs';
 const DB_VERSION = 2; // v2: added 'drafts' store for auto-saved in-progress cases (existing stores untouched)
 let dbPromise = new Promise((resolve, reject) => {
@@ -472,7 +483,7 @@ async function syncCaseToDrive(caseId) {
     for (const p of photos) {
       if (p.uploaded) continue;
       try {
-        const fileId = await driveUploadFile(folderId, p.blob, `${p.photoId}.jpg`, p.blob.type || 'image/jpeg');
+        const fileId = await driveUploadFile(folderId, p.blob, `${p.photoId}.${fileExtFor(p.blob)}`, p.blob.type || 'image/jpeg');
         await dbPut('photos', { ...p, uploaded: true, driveFileId: fileId });
       } catch (e) { allOk = false; }
     }
@@ -686,7 +697,10 @@ async function screenList() {
 
   return `
     <header class="top">
-      <h1>תיקי רכבים</h1>
+      <div>
+        <h1>תיקי רכבים</h1>
+        <div style="font-size:11px;color:var(--text-dim);margin-top:-4px;">v${APP_VERSION}</div>
+      </div>
       <button class="icon-btn" onclick="nav('garages')">🏢 מוסכים</button>
     </header>
 
@@ -832,7 +846,7 @@ async function screenNew() {
       <div class="gallery">
         ${d.photos.map((p,i) => `
           <div class="thumb">
-            <img src="${p.url}">
+            ${isVideoBlob(p.file) ? `<video src="${p.url}" muted></video><div class="vid-badge">🎥</div>` : `<img src="${p.url}">`}
             <button class="del" onclick="removePhoto(${i})">✕</button>
           </div>
         `).join('')}
@@ -924,27 +938,39 @@ let __cameraStream = null;
 let __videoTrack = null;
 let __imageCapture = null;
 let __cameraTargetCaseId = null;   // null = מוסיפים לטיוטת תיק חדש; אחרת = מוסיפים ישירות לתיק קיים
-let __cameraSessionCount = 0;      // כמה תמונות צולמו בסבב הנוכחי (לשימוש כשמוסיפים לתיק קיים)
+let __cameraSessionCount = 0;      // כמה תמונות/סרטונים צולמו בסבב הנוכחי (לשימוש כשמוסיפים לתיק קיים)
 let __zoomInfo = { supported: false, hardware: false, min: 1, max: 3, step: 0.1 };
 let __digitalZoom = 1;
 let __pinchStartDist = null;
 let __pinchStartZoom = 1;
+let __torchSupported = false;
+let __torchOn = false;
+let __cameraMode = 'photo'; // 'photo' | 'video'
+let __mediaRecorder = null;
+let __recordedChunks = [];
+let __isRecording = false;
 
 async function openCamera(targetCaseId) {
   __cameraTargetCaseId = targetCaseId || null;
   __cameraSessionCount = 0;
+  __cameraMode = 'photo';
+  __isRecording = false;
+  const videoConstraints = {
+    facingMode: { ideal: 'environment' },
+    width: { ideal: 1920 },
+    height: { ideal: 1080 }
+  };
   try {
-    __cameraStream = await navigator.mediaDevices.getUserMedia({
-      video: {
-        facingMode: { ideal: 'environment' },
-        width: { ideal: 1920 },
-        height: { ideal: 1080 }
-      },
-      audio: false
-    });
-  } catch (e) {
-    toast('לא ניתן לגשת למצלמה (' + e.message + '). אפשר לבחור תמונות דרך "העלאה".');
-    return;
+    // מבקשים גם מיקרופון כדי שסרטונים (למשל רעש ממנוע) יצאו עם קול.
+    __cameraStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: true });
+  } catch (e1) {
+    try {
+      __cameraStream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
+      toast('אין הרשאת מיקרופון — סרטונים יוקלטו בלי קול.');
+    } catch (e2) {
+      toast('לא ניתן לגשת למצלמה (' + e2.message + '). אפשר לבחור תמונות דרך "העלאה".');
+      return;
+    }
   }
   const video = document.getElementById('cameraVideo');
   video.srcObject = __cameraStream;
@@ -956,13 +982,15 @@ async function openCamera(targetCaseId) {
   __digitalZoom = 1;
   __zoomInfo = { supported: false, hardware: false, min: 1, max: 3, step: 0.1 };
   __imageCapture = null;
+  __torchSupported = false;
+  __torchOn = false;
 
   if (__videoTrack) {
     // ImageCapture — צילום סטילס אמיתי מהחומרה (העדיפות הראשונה)
     if (typeof ImageCapture !== 'undefined') {
       try { __imageCapture = new ImageCapture(__videoTrack); } catch (e) { __imageCapture = null; }
     }
-    // פוקוס אוטומטי רציף + יכולות זום, כשזמינות
+    // פוקוס אוטומטי רציף + יכולות זום/פלאש, כשזמינות
     if (__videoTrack.getCapabilities) {
       try {
         const caps = __videoTrack.getCapabilities();
@@ -974,6 +1002,7 @@ async function openCamera(targetCaseId) {
         } else {
           __zoomInfo = { supported: true, hardware: false, min: 1, max: 3, step: 0.1 };
         }
+        if (caps.torch) __torchSupported = true;
       } catch (e) {
         __zoomInfo = { supported: true, hardware: false, min: 1, max: 3, step: 0.1 };
       }
@@ -983,6 +1012,85 @@ async function openCamera(targetCaseId) {
   }
   setupZoomSlider();
   setupPinchAndTapToFocus();
+  setupCameraToolsRow();
+}
+
+function setupCameraToolsRow() {
+  const torchBtn = document.getElementById('torchBtn');
+  if (torchBtn) { torchBtn.classList.toggle('hidden', !__torchSupported); torchBtn.classList.remove('active'); }
+  const modeBtn = document.getElementById('modeBtn');
+  if (modeBtn) modeBtn.textContent = '🎥 מעבר לוידאו';
+  const captureBtn = document.getElementById('captureBtn');
+  if (captureBtn) captureBtn.classList.remove('recording');
+}
+
+function toggleCameraMode() {
+  if (__isRecording) return; // אי אפשר להחליף מצב באמצע הקלטה
+  __cameraMode = __cameraMode === 'photo' ? 'video' : 'photo';
+  const btn = document.getElementById('modeBtn');
+  if (btn) btn.textContent = __cameraMode === 'photo' ? '🎥 מעבר לוידאו' : '📷 מעבר לתמונה';
+}
+
+async function toggleTorch() {
+  if (!__videoTrack || !__torchSupported) return;
+  const next = !__torchOn;
+  try {
+    await __videoTrack.applyConstraints({ advanced: [{ torch: next }] });
+    __torchOn = next;
+  } catch (e) { toast('לא ניתן להפעיל פלאש במכשיר הזה'); }
+  const btn = document.getElementById('torchBtn');
+  if (btn) btn.classList.toggle('active', __torchOn);
+}
+
+function onCaptureTap() {
+  if (__cameraMode === 'video') { toggleRecording(); } else { capturePhoto(); }
+}
+
+function pickVideoMimeType() {
+  const candidates = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'];
+  for (const c of candidates) { if (window.MediaRecorder && MediaRecorder.isTypeSupported(c)) return c; }
+  return '';
+}
+
+function toggleRecording() {
+  if (__isRecording) { stopRecording(); } else { startRecording(); }
+}
+
+function startRecording() {
+  if (!__cameraStream || !window.MediaRecorder) { toast('הקלטת וידאו לא נתמכת בדפדפן הזה'); return; }
+  const mimeType = pickVideoMimeType();
+  try {
+    __mediaRecorder = mimeType ? new MediaRecorder(__cameraStream, { mimeType }) : new MediaRecorder(__cameraStream);
+  } catch (e) { toast('לא ניתן להתחיל הקלטה: ' + e.message); return; }
+  __recordedChunks = [];
+  __mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) __recordedChunks.push(e.data); };
+  __mediaRecorder.onstop = onRecordingStopped;
+  __mediaRecorder.start();
+  __isRecording = true;
+  const captureBtn = document.getElementById('captureBtn');
+  if (captureBtn) captureBtn.classList.add('recording');
+}
+
+function stopRecording() {
+  if (__mediaRecorder && __mediaRecorder.state !== 'inactive') { __mediaRecorder.stop(); }
+  __isRecording = false;
+  const captureBtn = document.getElementById('captureBtn');
+  if (captureBtn) captureBtn.classList.remove('recording');
+}
+
+async function onRecordingStopped() {
+  const blob = new Blob(__recordedChunks, { type: (__mediaRecorder && __mediaRecorder.mimeType) || 'video/webm' });
+  __recordedChunks = [];
+  if (!blob.size) return;
+  if (__cameraTargetCaseId) {
+    await dbPut('photos', { photoId: uuid(), caseId: __cameraTargetCaseId, blob, type: blob.type || 'image/jpeg' });
+    __cameraSessionCount++;
+  } else {
+    __newCaseDraft.photos.push({ file: blob, url: URL.createObjectURL(blob) });
+    scheduleAutosaveDraft();
+  }
+  updateCamCount();
+  toast('הווידאו נשמר');
 }
 
 function setupZoomSlider() {
@@ -1107,7 +1215,7 @@ async function capturePhoto() {
   if (!blob) return;
 
   if (__cameraTargetCaseId) {
-    await dbPut('photos', { photoId: uuid(), caseId: __cameraTargetCaseId, blob });
+    await dbPut('photos', { photoId: uuid(), caseId: __cameraTargetCaseId, blob, type: blob.type || 'image/jpeg' });
     __cameraSessionCount++;
   } else {
     __newCaseDraft.photos.push({ file: blob, url: URL.createObjectURL(blob) });
@@ -1124,6 +1232,16 @@ function flashShutter() {
 }
 
 async function closeCamera() {
+  if (__isRecording && __mediaRecorder && __mediaRecorder.state !== 'inactive') {
+    // מוודאים שההקלטה מסתיימת ונשמרת (dbPut) *לפני* שעוצרים את הטראקים,
+    // אחרת החלק האחרון של הסרטון עלול ללכת לאיבוד.
+    await new Promise((resolve) => {
+      const prevOnStop = __mediaRecorder.onstop;
+      __mediaRecorder.onstop = async () => { await prevOnStop(); resolve(); };
+      __mediaRecorder.stop();
+    });
+    __isRecording = false;
+  }
   if (__cameraStream) { __cameraStream.getTracks().forEach(t => t.stop()); __cameraStream = null; }
   __videoTrack = null;
   __imageCapture = null;
@@ -1133,7 +1251,7 @@ async function closeCamera() {
   if (row) row.classList.add('hidden');
 
   if (__cameraTargetCaseId && __cameraSessionCount > 0) {
-    await addHistoryEntry(__cameraTargetCaseId, `נוספו ${__cameraSessionCount} תמונות`);
+    await addHistoryEntry(__cameraTargetCaseId, `נוספו ${__cameraSessionCount} קבצי מדיה`);
     await reopenForSync(__cameraTargetCaseId);
   } else {
     renderInPlace();
@@ -1192,7 +1310,7 @@ async function finishCase() {
   });
 
   for (const p of d.photos) {
-    await dbPut('photos', { photoId: uuid(), caseId, blob: p.file });
+    await dbPut('photos', { photoId: uuid(), caseId, blob: p.file, type: p.file.type || 'image/jpeg' });
   }
   if (d.quote) {
     await dbPut('quotes', { quoteId: uuid(), caseId, blob: d.quote.file, name: d.quote.name, mime: d.quote.mime });
@@ -1261,12 +1379,17 @@ async function screenDetail(caseId) {
     </div>
 
     <div class="card">
-      <label style="font-size:13px;color:var(--text-dim);">תמונות (${photos.length})</label>
+      <label style="font-size:13px;color:var(--text-dim);">תמונות/וידאו (${photos.length})</label>
       <div class="gallery" id="detailGallery">
-        ${photos.map(p => p.blob
-          ? `<div class="thumb"><img data-photo-id="${p.photoId}"><button class="del" onclick="deletePhotoFromCase('${caseId}','${p.photoId}')">✕</button></div>`
-          : `<div class="thumb" style="display:flex;align-items:center;justify-content:center;font-size:22px;">☁️<button class="del" onclick="deletePhotoFromCase('${caseId}','${p.photoId}')">✕</button></div>`
-        ).join('')}
+        ${photos.map(p => {
+          const isVideo = p.blob ? isVideoBlob(p.blob) : (p.type && p.type.startsWith('video/'));
+          if (p.blob) {
+            return isVideo
+              ? `<div class="thumb"><video data-photo-id="${p.photoId}" muted onclick="event.stopPropagation(); this.play()"></video><div class="vid-badge">▶️</div><button class="del" onclick="event.stopPropagation();deletePhotoFromCase('${caseId}','${p.photoId}')">✕</button></div>`
+              : `<div class="thumb"><img data-photo-id="${p.photoId}"><button class="del" onclick="deletePhotoFromCase('${caseId}','${p.photoId}')">✕</button></div>`;
+          }
+          return `<div class="thumb" style="display:flex;align-items:center;justify-content:center;font-size:22px;">${isVideo ? '🎥☁️' : '☁️'}<button class="del" onclick="deletePhotoFromCase('${caseId}','${p.photoId}')">✕</button></div>`;
+        }).join('')}
       </div>
       <input type="file" accept="image/*" multiple id="detailGalleryInput" class="hidden" onchange="onDetailPhotosAdded(event,'${caseId}')">
       <div class="row" style="margin-top:10px">
@@ -1355,7 +1478,7 @@ async function onDetailPhotosAdded(e, caseId) {
   e.target.value = '';
   if (files.length === 0) return;
   for (const file of files) {
-    await dbPut('photos', { photoId: uuid(), caseId, blob: file });
+    await dbPut('photos', { photoId: uuid(), caseId, blob: file, type: file.type || 'image/jpeg' });
   }
   await addHistoryEntry(caseId, `נוספו ${files.length} תמונות`);
   await reopenForSync(caseId);
@@ -1384,8 +1507,8 @@ async function afterDetailRender(caseId) {
   const photos = await dbGetByIndex('photos', 'caseId', caseId);
   for (const p of photos) {
     if (!p.blob) continue;
-    const img = document.querySelector(`img[data-photo-id="${p.photoId}"]`);
-    if (img) img.src = URL.createObjectURL(p.blob);
+    const el = document.querySelector(`[data-photo-id="${p.photoId}"]`);
+    if (el) el.src = URL.createObjectURL(p.blob);
   }
   const notesEl = document.getElementById('detailNotes');
   if (notesEl) {
@@ -1485,7 +1608,7 @@ async function shareSelection(caseId, includePhotos, includeQuote) {
 
   if (includePhotos) {
     const photos = await dbGetByIndex('photos', 'caseId', caseId);
-    photos.filter(p => p.blob).forEach((p, i) => files.push(new File([p.blob], `photo_${i + 1}.jpg`, { type: p.blob.type || 'image/jpeg' })));
+    photos.filter(p => p.blob).forEach((p, i) => files.push(new File([p.blob], `photo_${i + 1}.${fileExtFor(p.blob)}`, { type: p.blob.type || 'image/jpeg' })));
   }
   if (includeQuote) {
     const quotes = await dbGetByIndex('quotes', 'caseId', caseId);
@@ -1574,6 +1697,13 @@ function uploadStatusLabel(status) {
     case 'failed': return '⚠️ נכשל';
     default: return '⏸ ממתין';
   }
+}
+function isVideoBlob(blob) { return !!(blob && blob.type && blob.type.startsWith('video/')); }
+function fileExtFor(blob) {
+  const type = blob && blob.type;
+  if (type === 'video/webm') return 'webm';
+  if (type === 'video/mp4') return 'mp4';
+  return 'jpg';
 }
 
 /* ====================== Render loop ====================== */
